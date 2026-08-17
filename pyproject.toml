@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling>=1.25,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ipython-mcp"
+version = "0.1.0"
+description = "A persistent IPython environment exposed through FastMCP."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastmcp>=3.1,<4",
+  "ipython>=8.25,<10",
+  "pydantic>=2.11.7,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0,<9",
+]
+
+[project.scripts]
+ipython-mcp = "ipython_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ipython_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src/ipython_mcp",
+  "/README.md",
+  "/pyproject.toml",
+  "/uv.lock",
+]
+
+[tool.hatch.build]
+exclude = [
+  "**/__pycache__/**",
+  "**/*.pyc",
+  ".backlog/**",
+  ".venv/**",
+  ".pytest_cache/**",
+  "dist/**",
+  "tests/**",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

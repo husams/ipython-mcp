@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "ipython-mcp": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/Users/husam/workspace/ipython-mcp",
+        "ipython-mcp"
+      ]
+    }
+  }
+}
