@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.25,<2"]
+requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [project]
@@ -7,6 +7,8 @@ name = "ipython-mcp"
 version = "0.1.0"
 description = "A persistent IPython environment exposed through FastMCP."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
   "fastmcp>=3.1,<4",
@@ -29,6 +31,7 @@ packages = ["src/ipython_mcp"]
 include = [
   "/src/ipython_mcp",
   "/README.md",
+  "/LICENSE",
   "/pyproject.toml",
   "/uv.lock",
 ]
