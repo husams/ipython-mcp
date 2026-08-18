@@ -11,12 +11,12 @@ from fastmcp.server.providers import Provider
 from fastmcp.tools import Tool, ToolResult
 
 from .models import CallFunctionResponse
-from .controller import ManagedRuntime
+from .runtime import ShellRuntime
 
 
-def runtime_from_context(ctx: Context) -> ManagedRuntime:
+def runtime_from_context(ctx: Context) -> ShellRuntime:
     runtime = ctx.lifespan_context.get("runtime")
-    if not isinstance(runtime, ManagedRuntime):
+    if not isinstance(runtime, ShellRuntime):
         raise RuntimeError("IPython runtime is unavailable outside the server lifespan")
     return runtime
 

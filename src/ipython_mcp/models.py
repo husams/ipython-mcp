@@ -26,26 +26,6 @@ class ErrorInfo(BaseModel):
     traceback_truncated: bool = False
 
 
-class RuntimeMetadata(BaseModel):
-    request_id: str
-    admission_sequence: int
-    epoch: int
-    queue_wait_seconds: float = 0.0
-    interruption_kind: Literal["operation_timeout", "operation_cancelled"] | None = None
-    namespace_state: Literal["unchanged", "preserved", "reset", "unknown"] = "unchanged"
-
-
-class RuntimeStatusResponse(BaseModel):
-    state: Literal["ready", "busy", "recovering", "unavailable", "closed"]
-    epoch: int
-    queue_depth: int
-    operation_active: bool
-    latest_interruption_kind: Literal["operation_timeout", "operation_cancelled"] | None = None
-    latest_namespace_state: Literal["unchanged", "preserved", "reset", "unknown"] = "unchanged"
-    replacement_startup_seconds: float | None = None
-    error: ErrorInfo | None = None
-
-
 class TruncationInfo(BaseModel):
     stdout: bool = False
     stderr: bool = False
@@ -67,7 +47,6 @@ class ExecuteResponse(BaseModel):
     display_data: list[dict[str, Any]] = Field(default_factory=list)
     error: ErrorInfo | None = None
     truncated: TruncationInfo = Field(default_factory=TruncationInfo)
-    runtime: RuntimeMetadata | None = None
 
 
 class FunctionTruncationInfo(BaseModel):
@@ -88,7 +67,6 @@ class ListResponse(BaseModel):
     functions: list[FunctionInfo]
     truncated: bool = False
     error: ErrorInfo | None = None
-    runtime: RuntimeMetadata | None = None
 
 
 class CallFunctionResponse(BaseModel):
@@ -97,7 +75,6 @@ class CallFunctionResponse(BaseModel):
     result: Any = None
     error: ErrorInfo | None = None
     truncated: bool = False
-    runtime: RuntimeMetadata | None = None
     name_truncated: bool = False
 
 
@@ -120,7 +97,6 @@ class SearchResponse(BaseModel):
     results: list[SearchResult]
     truncated: bool = False
     error: ErrorInfo | None = None
-    runtime: RuntimeMetadata | None = None
 
 
 class ReloadResult(BaseModel):
@@ -134,7 +110,6 @@ class ReloadResult(BaseModel):
 class ReloadResponse(BaseModel):
     results: list[ReloadResult]
     error: ErrorInfo | None = None
-    runtime: RuntimeMetadata | None = None
 
 
 class InspectTruncationInfo(BaseModel):
@@ -157,7 +132,6 @@ class InspectResponse(BaseModel):
     representation: str | None = None
     truncated: InspectTruncationInfo = Field(default_factory=InspectTruncationInfo)
     error: ErrorInfo | None = None
-    runtime: RuntimeMetadata | None = None
 
 
 class RemoveResponse(BaseModel):
@@ -166,7 +140,6 @@ class RemoveResponse(BaseModel):
     refused: list[str] = Field(default_factory=list)
     unknown: list[str] = Field(default_factory=list)
     error: ErrorInfo | None = None
-    runtime: RuntimeMetadata | None = None
 
 
 class ResetResponse(BaseModel):
@@ -174,7 +147,6 @@ class ResetResponse(BaseModel):
     removed: list[str] = Field(default_factory=list)
     execution_count: int
     error: ErrorInfo | None = None
-    runtime: RuntimeMetadata | None = None
 
 
 class DynamicToolRegistration(BaseModel):
@@ -193,7 +165,6 @@ class RegisterToolResponse(BaseModel):
     ok: bool
     registration: DynamicToolRegistration | None = None
     error: ErrorInfo | None = None
-    runtime: RuntimeMetadata | None = None
 
 
 class UnregisterToolResponse(BaseModel):
@@ -202,4 +173,3 @@ class UnregisterToolResponse(BaseModel):
     unknown: list[str] = Field(default_factory=list)
     revision: int
     error: ErrorInfo | None = None
-    runtime: RuntimeMetadata | None = None
