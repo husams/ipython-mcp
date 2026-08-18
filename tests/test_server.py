@@ -5,15 +5,15 @@ import hashlib
 import json
 import logging
 import sys
-import threading
 import time
 from pathlib import Path
 
+import pytest
 from fastmcp import Client
 from fastmcp.client.messages import MessageHandler
 
 from ipython_mcp.config import ServerConfig
-from ipython_mcp.runtime import ShellRuntime
+from ipython_mcp.runtime import RuntimeStartupError, ShellRuntime
 from ipython_mcp.server import create_server
 
 EXPECTED_TOOLS = {
@@ -27,7 +27,6 @@ EXPECTED_TOOLS = {
     "reset",
     "register_tool",
     "unregister_tool",
-    "runtime_status",
 }
 
 
@@ -118,8 +117,6 @@ def test_end_to_end_vertical_slice_and_clean_lifespan_teardown(tmp_path: Path):
             assert (await call_tool(client, "call_function", {"name": "vertical_lib.value", "arguments": {}}))["result"] == 2
 
     call(scenario())
-    assert not any(thread.name.startswith("ipython-shell_") for thread in threading.enumerate())
-    assert not any(thread.name == "IPythonHistorySavingThread" for thread in threading.enumerate())
 
 
 def test_call_function_structured_failures_and_json_boundary():
@@ -146,7 +143,7 @@ def test_preload_library_reload_and_alias(tmp_path: Path):
 
     async def scenario():
         async with Client(create_server(config)) as client:
-            assert library_path not in sys.path
+            assert library_path in sys.path
             assert (await call_tool(client, "call_function", {"name": "lib.value", "arguments": {}}))["result"] == 1
             module.write_text("VALUE = 2\ndef value():\n    return VALUE\n", encoding="utf-8")
             reloaded = await call_tool(client, "reload", {"modules": ["agent_lib"]})
@@ -162,14 +159,11 @@ def test_preload_failure_names_module_and_is_atomic(tmp_path: Path):
     library_path = str(tmp_path.resolve())
 
     async def scenario():
-        async with Client(create_server(config)) as client:
-            status = await call_tool(client, "runtime_status")
-            assert status["state"] == "unavailable"
-            assert status["error"]["code"] == "worker_startup_failed"
-            assert "does_not_exist" in status["error"]["message"]
-            failed = await call_tool(client, "execute", {"code": "value = 1"})
-            assert failed["error"]["code"] == "runtime_unavailable"
-            assert library_path not in sys.path
+        runtime = ShellRuntime(config)
+        with pytest.raises(RuntimeStartupError, match="does_not_exist"):
+            await runtime.start()
+        assert runtime.closed is True
+        assert library_path not in sys.path
 
     call(scenario())
 
@@ -198,7 +192,7 @@ def test_default_logs_do_not_contain_sensitive_call_data(caplog):
             await call_tool(client, "execute", {"code": "def explode():\n    traceback_local = 'local-secret'\n    raise RuntimeError('failure')"})
             await call_tool(client, "call_function", {"name": "explode", "arguments": {}})
 
-    with caplog.at_level(logging.INFO, logger="ipython_mcp.controller"):
+    with caplog.at_level(logging.INFO, logger="ipython_mcp.runtime"):
         call(scenario())
     logs = caplog.text
     for secret in ("secret_result", "result-value", "json-argument", "local-secret", "traceback_local"):

@@ -563,6 +563,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
     { name = "ipython" },
+    { name = "packaging" },
     { name = "pydantic" },
 ]
 
@@ -575,6 +576,7 @@ dev = [
 requires-dist = [
     { name = "fastmcp", specifier = ">=3.1,<4" },
     { name = "ipython", specifier = ">=8.25,<10" },
+    { name = "packaging", specifier = ">=24,<27" },
     { name = "pydantic", specifier = ">=2.11.7,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0,<9" },
 ]

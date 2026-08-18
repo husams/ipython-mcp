@@ -1,23 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import multiprocessing
 import os
-import shutil
+import subprocess
 import sys
+import threading
 import time
 import tracemalloc
+import zipfile
 from pathlib import Path
 
 import pytest
 from fastmcp import Client
-from fastmcp.client.messages import MessageHandler
 from fastmcp.client.transports import StdioTransport
 
 from ipython_mcp.config import ServerConfig
-from ipython_mcp.controller import ManagedRuntime
-from ipython_mcp.runtime import BoundedTextSink
+from ipython_mcp.runtime import BoundedTextSink, RuntimeStartupError, ShellRuntime
 from ipython_mcp.server import create_server
 
 
@@ -26,203 +27,118 @@ async def call_tool(client: Client, name: str, arguments: dict | None = None):
     return result.structured_content
 
 
-async def wait_until_ready(runtime: ManagedRuntime, timeout: float = 5.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        status = await runtime.runtime_status()
-        if status.state in {"ready", "unavailable"}:
-            return status
-        await asyncio.sleep(0.01)
-    raise AssertionError("runtime did not settle")
+def _wheel(directory: Path, version: str) -> Path:
+    wheel = directory / f"taskdep-{version}-py3-none-any.whl"
+    dist_info = f"taskdep-{version}.dist-info"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "taskdep/__init__.py",
+            f"__version__ = {version!r}\nVALUE = {version!r}\n",
+        )
+        archive.writestr(
+            f"{dist_info}/METADATA",
+            f"Metadata-Version: 2.1\nName: taskdep\nVersion: {version}\n",
+        )
+        archive.writestr(
+            f"{dist_info}/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: ipython-mcp-tests\n"
+            "Root-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(f"{dist_info}/RECORD", "")
+    return wheel
 
 
-def test_reliability_configuration_is_positive_finite(monkeypatch):
-    monkeypatch.setenv("IPYTHON_MCP_OPERATION_TIMEOUT_SECONDS", "1.5")
-    monkeypatch.setenv("IPYTHON_MCP_INTERRUPTION_GRACE_SECONDS", "0.25")
-    monkeypatch.setenv("IPYTHON_MCP_WORKER_STARTUP_TIMEOUT_SECONDS", "4")
-    monkeypatch.setenv("IPYTHON_MCP_MAX_PENDING_OPERATIONS", "7")
-    monkeypatch.setenv("IPYTHON_MCP_QUEUE_WAIT_TIMEOUT_SECONDS", "2.5")
+def test_configuration_validates_optional_environment_and_removed_worker_fields(
+    monkeypatch, tmp_path: Path
+):
+    monkeypatch.setenv("IPYTHON_MCP_ENVIRONMENT_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("IPYTHON_MCP_ACTIVE_ENVIRONMENT", "analysis")
+    monkeypatch.setenv(
+        "IPYTHON_MCP_ENVIRONMENT_REQUIREMENTS", '["packaging>=24", "packaging>=24"]'
+    )
+    monkeypatch.setenv(
+        "IPYTHON_MCP_ENVIRONMENT_VARIABLES", '{"TASK_MODE":"offline"}'
+    )
+    monkeypatch.setenv("IPYTHON_MCP_ENVIRONMENT_SETUP_TIMEOUT_SECONDS", "1.5")
     config = ServerConfig.from_env()
-    assert config.operation_timeout_seconds == 1.5
-    assert config.interruption_grace_seconds == 0.25
-    assert config.worker_startup_timeout_seconds == 4
-    assert config.max_pending_operations == 7
-    assert config.queue_wait_timeout_seconds == 2.5
-    for field, value in (
-        ("operation_timeout_seconds", 0),
-        ("interruption_grace_seconds", float("inf")),
-        ("worker_startup_timeout_seconds", -1),
-        ("queue_wait_timeout_seconds", float("nan")),
-        ("max_pending_operations", 0),
+    assert config.environment_workspace == tmp_path
+    assert config.active_environment == "analysis"
+    assert config.environment_requirements == ("packaging>=24",)
+    assert config.environment_variables == {"TASK_MODE": "offline"}
+    assert config.environment_setup_timeout_seconds == 1.5
+    for removed in (
+        "operation_timeout_seconds",
+        "interruption_grace_seconds",
+        "worker_startup_timeout_seconds",
+        "max_pending_operations",
+        "queue_wait_timeout_seconds",
+        "max_ipc_message_bytes",
     ):
-        with pytest.raises(ValueError):
-            ServerConfig(**{field: value})
+        assert not hasattr(config, removed)
+
+    with pytest.raises(ValueError, match="configured together"):
+        ServerConfig(environment_workspace=tmp_path)
+    with pytest.raises(ValueError, match="safe name"):
+        ServerConfig(environment_workspace=tmp_path, active_environment="../escape")
+    with pytest.raises(ValueError, match="absolute"):
+        ServerConfig(library_paths=(Path("relative-library"),))
+    with pytest.raises(ValueError, match="PEP 508"):
+        ServerConfig(
+            environment_workspace=tmp_path,
+            active_environment="badreq",
+            environment_requirements=("not a valid !!! requirement",),
+        )
+    with pytest.raises(ValueError, match="protected"):
+        ServerConfig(preload_modules=("math",), module_aliases={"math": "open"})
+    with pytest.raises(ValueError, match="matching preloads"):
+        ServerConfig(module_aliases={"math": "m"})
+    with pytest.raises(ValueError, match="positive finite"):
+        ServerConfig(environment_setup_timeout_seconds=float("inf"))
 
 
-def test_live_state_and_objects_exist_only_in_worker_process():
+def test_unconfigured_shell_is_direct_in_process_and_starts_no_runtime_child():
     async def scenario():
-        runtime = ManagedRuntime(ServerConfig(worker_startup_timeout_seconds=5))
+        children_before = {child.pid for child in multiprocessing.active_children()}
+        runtime = ShellRuntime(ServerConfig())
         await runtime.start()
         try:
             created = await runtime.execute(
-                "import os\nworker_pid = os.getpid()\nmarker = object()\nmarker_identity = id(marker)\nworker_pid"
+                "import os\nprocess_id = os.getpid()\nmarker = object()\n"
+                "marker_id = id(marker)\n(process_id, marker_id)"
             )
-            assert created.ok
-            assert created.result != os.getpid()
-            observed = await runtime.execute("(worker_pid, id(marker), marker_identity)")
-            assert observed.result == [created.result, observed.result[2], observed.result[2]]
-            assert observed.runtime.epoch == 1
+            assert created.result == [os.getpid(), created.result[1]]
+            observed = await runtime.execute("(process_id, id(marker), marker_id)")
+            assert observed.result == [os.getpid(), observed.result[1], observed.result[1]]
+            assert "runtime" not in observed.model_dump()
+            assert {child.pid for child in multiprocessing.active_children()} == children_before
         finally:
             await runtime.close()
 
     asyncio.run(scenario())
 
 
-def test_cooperative_timeout_preserves_partial_mutation_identity_and_epoch():
+def test_started_operation_is_not_preempted_by_timeout_or_cancellation():
     async def scenario():
-        runtime = ManagedRuntime(
-            ServerConfig(
-                operation_timeout_seconds=0.08,
-                interruption_grace_seconds=0.8,
-                worker_startup_timeout_seconds=5,
-            )
-        )
+        runtime = ShellRuntime(ServerConfig())
         await runtime.start()
         try:
-            response = await runtime.execute(
-                "partial = []\nidentity = id(partial)\npartial.append('kept')\nwhile True:\n    pass"
+            started = time.monotonic()
+            async with asyncio.timeout(0.01):
+                result = await runtime.execute("import time\ntime.sleep(0.06)\n'finished'")
+            assert result.result == "finished"
+            assert time.monotonic() - started >= 0.05
+
+            loop = asyncio.get_running_loop()
+            task = asyncio.create_task(
+                runtime.execute("import time\ntime.sleep(0.06)\n'not-preempted'")
             )
-            assert response.error.code == "operation_timeout"
-            assert response.runtime.namespace_state == "preserved"
-            assert response.runtime.epoch == 1
-            observed = await runtime.execute("(partial, id(partial), identity)")
-            assert observed.result == [["kept"], observed.result[2], observed.result[2]]
-            status = await runtime.runtime_status()
-            assert status.state == "ready"
-            assert status.latest_namespace_state == "preserved"
-        finally:
-            await runtime.close()
-
-    asyncio.run(scenario())
-
-
-class ToolChangeRecorder(MessageHandler):
-    def __init__(self):
-        self.count = 0
-
-    async def on_tool_list_changed(self, message):
-        del message
-        self.count += 1
-
-
-def test_non_cooperative_timeout_replaces_worker_epoch_and_catalog():
-    async def scenario():
-        recorder = ToolChangeRecorder()
-        config = ServerConfig(
-            preload_modules=("math",),
-            operation_timeout_seconds=0.08,
-            interruption_grace_seconds=0.05,
-            worker_startup_timeout_seconds=5,
-        )
-        async with Client(create_server(config), message_handler=recorder) as client:
-            await call_tool(
-                client,
-                "execute",
-                {"code": "survivor = 9\ndef slow(x: int) -> int:\n    import time\n    time.sleep(2)\n    return x"},
-            )
-            assert (await call_tool(client, "register_tool", {"name": "slow"}))["ok"]
-            timed_out = await call_tool(client, "slow", {"x": 1})
-            assert timed_out["error"]["code"] == "operation_timeout"
-            assert timed_out["runtime"]["namespace_state"] == "reset"
-            assert timed_out["runtime"]["epoch"] == 2
-            await asyncio.sleep(0)
-            tools = {tool.name for tool in await client.list_tools()}
-            assert "slow" not in tools
-            assert recorder.count >= 2
-            missing = await call_tool(client, "inspect", {"name": "survivor"})
-            assert missing["error"]["code"] == "name_not_found"
-            restored = await call_tool(client, "execute", {"code": "math.sqrt(9)"})
-            assert restored["result"] == 3.0
-            later = await call_tool(client, "execute", {"code": "after_reset = 1\nafter_reset"})
-            assert later["result"] == 1
-            status = await call_tool(client, "runtime_status")
-            assert status["epoch"] == 2
-            assert status["replacement_startup_seconds"] <= 5
-
-    asyncio.run(scenario())
-
-
-def test_active_and_queued_cancellation_preserve_fifo_and_recovery():
-    async def scenario():
-        runtime = ManagedRuntime(
-            ServerConfig(
-                operation_timeout_seconds=2,
-                interruption_grace_seconds=0.8,
-                queue_wait_timeout_seconds=2,
-                worker_startup_timeout_seconds=5,
-            )
-        )
-        await runtime.start()
-        try:
-            await runtime.execute("events = []")
-            active = asyncio.create_task(
-                runtime.execute("while True:\n    pass")
-            )
-            while not (await runtime.runtime_status()).operation_active:
-                await asyncio.sleep(0.005)
-            queued = asyncio.create_task(runtime.execute("events.append('cancelled')"))
-            remaining = asyncio.create_task(runtime.execute("events.append('remaining')"))
-            await asyncio.sleep(0.02)
-            queued.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await queued
-            active.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await active
-            status = await wait_until_ready(runtime)
-            assert status.latest_interruption_kind == "operation_cancelled"
-            await remaining
-            observed = await runtime.execute("events")
-            assert observed.result == ["remaining"]
-        finally:
-            await runtime.close()
-
-    asyncio.run(scenario())
-
-
-def test_bounded_fifo_full_queue_and_queue_wait_expiry():
-    async def scenario():
-        runtime = ManagedRuntime(
-            ServerConfig(
-                operation_timeout_seconds=1,
-                interruption_grace_seconds=0.5,
-                max_pending_operations=1,
-                queue_wait_timeout_seconds=0.05,
-                worker_startup_timeout_seconds=5,
-            )
-        )
-        await runtime.start()
-        try:
-            first = asyncio.create_task(runtime.execute("import time\ntime.sleep(0.4)\n'first'"))
-            while not (await runtime.runtime_status()).operation_active:
-                await asyncio.sleep(0.005)
-            second = asyncio.create_task(runtime.execute("'second'"))
-            await asyncio.sleep(0)
-            busy = await runtime.execute("'rejected'")
-            assert busy.error.code == "runtime_busy"
-            assert busy.error.retryable is True
-            assert busy.error.retry_after_seconds == 0.05
-            wait_started = time.monotonic()
-            expired = await second
-            assert time.monotonic() - wait_started < 0.2
-            assert expired.error.code == "queue_timeout"
-            assert expired.error.retryable is True
-            assert expired.error.retry_after_seconds == 0.05
-            assert expired.execution_count is None
-            assert (await first).result == "first"
-            recovered = await runtime.execute("'later'")
-            assert recovered.result == "later"
-            assert recovered.runtime.admission_sequence > busy.runtime.admission_sequence
+            timer = threading.Timer(0.01, lambda: loop.call_soon_threadsafe(task.cancel))
+            timer.start()
+            try:
+                assert (await task).result == "not-preempted"
+            finally:
+                timer.cancel()
+            assert (await runtime.execute("'still-same-shell'" )).result == "still-same-shell"
         finally:
             await runtime.close()
 
@@ -249,12 +165,7 @@ def test_streaming_capture_memory_ceiling_and_protocol_truncation():
     assert peak_large - peak_small <= 2 * 1024 * 1024
 
     async def scenario():
-        config = ServerConfig(
-            max_text_chars=128,
-            max_repr_chars=64,
-            max_display_items=2,
-            worker_startup_timeout_seconds=5,
-        )
+        config = ServerConfig(max_text_chars=128, max_repr_chars=64, max_display_items=2)
         async with Client(create_server(config)) as client:
             output = await call_tool(client, "execute", {"code": "print('z' * 1000000)"})
             assert len(output["stdout"]) == 128
@@ -271,146 +182,199 @@ def test_streaming_capture_memory_ceiling_and_protocol_truncation():
             displayed = await call_tool(
                 client,
                 "execute",
-                {
-                    "code": "from IPython.display import display\nfor _ in range(5):\n    display({'text/plain': 'd' * 1000, 'application/json': {'payload': 'j' * 1000}}, raw=True, metadata={'note': 'm' * 1000})"
-                },
+                {"code": "from IPython.display import display\nfor _ in range(5):\n    display({'text/plain': 'd' * 1000, 'application/json': {'payload': 'j' * 1000}}, raw=True, metadata={'note': 'm' * 1000})"},
             )
             assert len(displayed["display_data"]) == 2
             assert displayed["truncated"]["display_data"] is True
-            for item in displayed["display_data"]:
-                assert len(item["data"]["text/plain"]) == 128
-                assert len(item["data"]["application/json"]["payload"]) == 128
 
     asyncio.run(scenario())
 
 
-def test_stale_worker_response_is_discarded_and_later_request_succeeds(monkeypatch):
-    async def scenario():
-        runtime = ManagedRuntime(ServerConfig(worker_startup_timeout_seconds=5))
+def test_startup_environment_applies_variables_paths_preloads_and_reuses(
+    tmp_path: Path, monkeypatch
+):
+    workspace = tmp_path / "environments"
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "preload_lib.py").write_text(
+        "import os\nVALUE = os.environ['TASK_SETTING']\n", encoding="utf-8"
+    )
+    wheel = _wheel(tmp_path, "1.0")
+    config = ServerConfig(
+        environment_workspace=workspace,
+        active_environment="alpha",
+        environment_requirements=(f"taskdep @ {wheel.as_uri()}",),
+        environment_variables={"TASK_SETTING": "configured-value"},
+        library_paths=(library,),
+        preload_modules=("taskdep", "preload_lib"),
+        module_aliases={"preload_lib": "lib"},
+    )
+    monkeypatch.delenv("TASK_SETTING", raising=False)
+
+    async def run_once():
+        runtime = ShellRuntime(config)
         await runtime.start()
-        original_receive = runtime._receive
-
-        async def obsolete_receive():
-            message = await original_receive()
-            if message.get("type") == "response":
-                return {**message, "epoch": int(message["epoch"]) + 1}
-            return message
-
         try:
-            monkeypatch.setattr(runtime, "_receive", obsolete_receive)
-            stale = await runtime.execute("stale_marker = 41")
-            assert stale.error.code == "stale_runtime_response"
-            assert stale.runtime.namespace_state == "unknown"
-            monkeypatch.setattr(runtime, "_receive", original_receive)
-            later = await runtime.execute("stale_marker + 1")
-            assert later.result == 42
+            result = await runtime.execute(
+                "(taskdep.__version__, lib.VALUE, __import__('os').environ['TASK_SETTING'])"
+            )
+            assert result.result == ["1.0", "configured-value", "configured-value"]
+            assert runtime._startup_environment.site_packages is not None
+            assert str(runtime._startup_environment.site_packages) == sys.path[0]
         finally:
             await runtime.close()
 
-    asyncio.run(scenario())
+    asyncio.run(run_once())
+    metadata = workspace / "alpha" / ".ipython-mcp-environment.json"
+    first_metadata = metadata.read_text(encoding="utf-8")
+    assert "TASK_SETTING" not in first_metadata
+    assert os.getenv("TASK_SETTING") is None
+    for module in ("taskdep", "preload_lib"):
+        sys.modules.pop(module, None)
+    asyncio.run(run_once())
+    assert metadata.read_text(encoding="utf-8") == first_metadata
+    assert not list(workspace.glob(".alpha.tmp-*"))
 
 
-def test_call_function_timeout_recovers_twice_and_succeeds_after_each():
-    async def scenario():
-        runtime = ManagedRuntime(
-            ServerConfig(
-                operation_timeout_seconds=0.06,
-                interruption_grace_seconds=0.04,
-                worker_startup_timeout_seconds=5,
-            )
+def test_separate_process_startups_select_conflicting_dependency_versions(
+    tmp_path: Path
+):
+    wheel_one = _wheel(tmp_path, "1.0")
+    wheel_two = _wheel(tmp_path, "2.0")
+    workspace = tmp_path / "task-environments"
+    project = Path(__file__).resolve().parents[1]
+    script = """
+import asyncio
+import json
+import sys
+from pathlib import Path
+from ipython_mcp.config import ServerConfig
+from ipython_mcp.runtime import ShellRuntime
+
+async def main():
+    runtime = ShellRuntime(ServerConfig(
+        environment_workspace=Path(sys.argv[1]),
+        active_environment=sys.argv[2],
+        environment_requirements=(sys.argv[3],),
+        preload_modules=("taskdep",),
+    ))
+    await runtime.start()
+    result = await runtime.execute("taskdep.__version__")
+    await runtime.close()
+    print(json.dumps(result.result))
+
+asyncio.run(main())
+"""
+    observed = []
+    for name, wheel in (("one", wheel_one), ("two", wheel_two)):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(workspace),
+                name,
+                f"taskdep @ {wheel.as_uri()}",
+            ],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
         )
-        await runtime.start()
-        try:
-            for expected_epoch in (2, 3):
-                defined = await runtime.execute(
-                    "def blocking_call():\n    import time\n    time.sleep(2)\n    return 'late'"
-                )
-                assert defined.ok
-                timed_out = await runtime.call_function("blocking_call", {})
-                assert timed_out.error.code == "operation_timeout"
-                assert timed_out.runtime.namespace_state == "reset"
-                assert timed_out.runtime.epoch == expected_epoch
-                later = await runtime.execute(f"'ready-{expected_epoch}'")
-                assert later.result == f"ready-{expected_epoch}"
-        finally:
-            await runtime.close()
-
-    asyncio.run(scenario())
+        observed.append(json.loads(completed.stdout.strip()))
+    assert observed == ["1.0", "2.0"]
 
 
-def test_replacement_startup_failure_is_atomic_and_bounded(tmp_path: Path):
-    module = tmp_path / "fragile_preload.py"
-    module.write_text("VALUE = 1\n", encoding="utf-8")
+def test_startup_failures_are_phase_specific_redacted_and_clean(
+    tmp_path: Path, monkeypatch
+):
+    workspace = tmp_path / "envs"
+    secret = "never-expose-this"
+    config = ServerConfig(
+        environment_workspace=workspace,
+        active_environment="broken",
+        environment_variables={"TASK_SECRET": secret},
+        environment_requirements=("private @ https://user:password@example.invalid/pkg.whl",),
+        max_text_chars=160,
+    )
 
-    async def scenario():
-        runtime = ManagedRuntime(
-            ServerConfig(
-                library_paths=(tmp_path,),
-                preload_modules=("fragile_preload",),
-                operation_timeout_seconds=0.06,
-                interruption_grace_seconds=0.04,
-                worker_startup_timeout_seconds=3,
-            )
+    def failed_run(*args, **kwargs):
+        del args, kwargs
+        return subprocess.CompletedProcess(
+            [], 1, stdout="", stderr=f"https://user:password@example.invalid {secret}"
         )
-        await runtime.start()
-        try:
-            assert (await runtime.execute("fragile_preload.VALUE")).result == 1
-            module.unlink()
-            failed = await runtime.execute("import time\ntime.sleep(2)")
-            assert failed.error.code == "operation_timeout"
-            assert failed.runtime.namespace_state == "unknown"
-            status = await runtime.runtime_status()
-            assert status.state == "unavailable"
-            assert status.error.code == "worker_startup_failed"
-            unavailable = await runtime.execute("1 + 1")
-            assert unavailable.error.code == "runtime_unavailable"
-        finally:
-            await runtime.close()
+
+    monkeypatch.setattr(subprocess, "run", failed_run)
+
+    async def scenario():
+        runtime = ShellRuntime(config)
+        with pytest.raises(RuntimeStartupError) as caught:
+            await runtime.start()
+        message = str(caught.value)
+        assert "during provisioning" in message
+        assert "password" not in message
+        assert secret not in message
+        assert "***" in message
+        assert runtime.closed is True
 
     asyncio.run(scenario())
+    assert not (workspace / "broken").exists()
+    assert not list(workspace.glob(".broken.tmp-*"))
+    assert os.getenv("TASK_SECRET") is None
+
+    symlink = tmp_path / "workspace-link"
+    symlink.symlink_to(workspace, target_is_directory=True)
+    runtime = ShellRuntime(
+        ServerConfig(environment_workspace=symlink, active_environment="safe")
+    )
+    with pytest.raises(RuntimeStartupError, match="path_validation"):
+        asyncio.run(runtime.start())
 
 
-def test_bounded_shutdown_during_non_cooperative_work_leaves_no_worker():
+def test_runtime_logs_are_metadata_only(caplog):
     async def scenario():
-        runtime = ManagedRuntime(
-            ServerConfig(
-                operation_timeout_seconds=10,
-                interruption_grace_seconds=0.05,
-                worker_startup_timeout_seconds=5,
-            )
-        )
-        await runtime.start()
-        active = asyncio.create_task(runtime.execute("import time\ntime.sleep(10)"))
-        while not (await runtime.runtime_status()).operation_active:
-            await asyncio.sleep(0.005)
-        started = time.monotonic()
-        await runtime.close()
-        assert time.monotonic() - started < 1.5
-        result = await active
-        assert result.error.code == "operation_cancelled"
-        await runtime.close()
-        assert not any(child.name == "ipython-mcp-worker" for child in multiprocessing.active_children())
-
-    asyncio.run(scenario())
-
-
-def test_parent_logs_only_bounded_operational_metadata(caplog):
-    async def scenario():
-        async with Client(create_server(ServerConfig(worker_startup_timeout_seconds=5))) as client:
+        async with Client(create_server()) as client:
             await call_tool(client, "execute", {"code": "log_secret = 'never-log-me'"})
             await call_tool(client, "execute", {"code": "raise RuntimeError('trace-secret')"})
 
-    with caplog.at_level(logging.INFO, logger="ipython_mcp.controller"):
+    with caplog.at_level(logging.INFO, logger="ipython_mcp.runtime"):
         asyncio.run(scenario())
     assert "tool=execute" in caplog.text
-    assert "request_id=" in caplog.text
-    assert "epoch=" in caplog.text
     assert "log_secret" not in caplog.text
     assert "never-log-me" not in caplog.text
     assert "trace-secret" not in caplog.text
 
 
-def test_subprocess_stdio_persistent_dynamic_cleanup_flow():
+def test_worker_ipc_controller_and_status_contracts_are_absent():
+    project = Path(__file__).resolve().parents[1]
+    package = project / "src" / "ipython_mcp"
+    for removed in ("controller.py", "worker.py", "ipc.py"):
+        assert not (package / removed).exists()
+    source = "\n".join(path.read_text(encoding="utf-8") for path in package.glob("*.py"))
+    for removed_symbol in (
+        "multiprocessing",
+        "RuntimeMetadata",
+        "RuntimeStatusResponse",
+        "runtime_status",
+        "max_ipc_message_bytes",
+        "worker_startup_timeout_seconds",
+        "queue_wait_timeout_seconds",
+    ):
+        assert removed_symbol not in source
+
+    async def scenario():
+        async with Client(create_server()) as client:
+            names = {tool.name for tool in await client.list_tools()}
+            assert "runtime_status" not in names
+            response = await call_tool(client, "execute", {"code": "40 + 2"})
+            assert response["result"] == 42
+            assert "runtime" not in response
+
+    asyncio.run(scenario())
+
+
+def test_stdio_persistent_dynamic_cleanup_flow():
     project = Path(__file__).resolve().parents[1]
     transport = StdioTransport(
         command=sys.executable,
@@ -422,7 +386,7 @@ def test_subprocess_stdio_persistent_dynamic_cleanup_flow():
     async def scenario():
         async with Client(transport) as client:
             names = {tool.name for tool in await client.list_tools()}
-            assert "runtime_status" in names
+            assert "runtime_status" not in names
             await call_tool(
                 client,
                 "execute",
@@ -430,12 +394,9 @@ def test_subprocess_stdio_persistent_dynamic_cleanup_flow():
             )
             assert (await call_tool(client, "inspect", {"name": "Marker"}))["kind"] == "type"
             assert (await call_tool(client, "register_tool", {"name": "add"}))["ok"]
-            assert "add" in {tool.name for tool in await client.list_tools()}
             assert (await call_tool(client, "add", {"x": 4}))["result"] == 9
             assert (await call_tool(client, "unregister_tool", {"names": ["add"]}))["unregistered"] == ["add"]
             assert (await call_tool(client, "remove", {"names": ["Marker"]}))["removed"] == ["Marker"]
-            reset = await call_tool(client, "reset")
-            assert reset["ok"]
-            assert (await call_tool(client, "search", {"query": "value", "exact": True}))["results"] == []
+            assert (await call_tool(client, "reset"))["ok"]
 
     asyncio.run(scenario())

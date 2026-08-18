@@ -9,7 +9,6 @@ from fastmcp import FastMCP
 from fastmcp.server.context import Context
 
 from .config import ServerConfig
-from .controller import ManagedRuntime
 from .models import (
     CallFunctionResponse,
     ExecuteResponse,
@@ -18,15 +17,15 @@ from .models import (
     ReloadResponse,
     RemoveResponse,
     ResetResponse,
-    RuntimeStatusResponse,
     RegisterToolResponse,
     SearchResponse,
     UnregisterToolResponse,
 )
 from .provider import DynamicToolProvider, notify_tool_list_changed, runtime_from_context
+from .runtime import ShellRuntime
 
 
-def _runtime(ctx: Context) -> ManagedRuntime:
+def _runtime(ctx: Context) -> ShellRuntime:
     state: Any = ctx.request_context.lifespan_context
     return state["runtime"]
 
@@ -38,7 +37,7 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
 
     @asynccontextmanager
     async def lifespan(_: FastMCP):
-        runtime = ManagedRuntime(server_config)
+        runtime = ShellRuntime(server_config)
         await runtime.start()
         try:
             yield {"runtime": runtime}
@@ -61,7 +60,6 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
     server.tool(name="reset")(reset)
     server.tool(name="register_tool")(register_tool)
     server.tool(name="unregister_tool")(unregister_tool)
-    server.tool(name="runtime_status")(runtime_status)
     server.add_provider(DynamicToolProvider())
     return server
 
@@ -155,12 +153,6 @@ async def unregister_tool(
     outcome = await _runtime(ctx).unregister_tool(names)
     await notify_tool_list_changed(ctx, outcome.catalog_changed)
     return outcome.value
-
-
-async def runtime_status(ctx: Context) -> RuntimeStatusResponse:
-    """Report bounded out-of-band worker, queue, epoch, and recovery metadata."""
-
-    return await _runtime(ctx).runtime_status()
 
 
 mcp = create_server()
