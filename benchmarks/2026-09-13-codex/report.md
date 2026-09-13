@@ -1,5 +1,13 @@
 # Codex CLI validation and token measurements
 
+> Historical measurements for commit `37ac227`, before integration with the
+> in-process runtime merged in `44f691d`. The current runtime preserves the new
+> startup environments, executes Python on a dedicated worker thread, and
+> exposes ten full-profile tools or two compact tools without status/epoch
+> metadata. The token percentages below describe the archived worker-process
+> revision. Reproduce that wire measurement from `37ac227`; run the CLI harness
+> on the current checkout for new measurements.
+
 The final compact profile plus repository skill used **10.3% fewer total tokens with Luna** and **19.5% fewer with Astra** than the full-profile runs on this task. Both models produced correct reports, reused live objects across calls, and reused unchanged helper files in a fresh server process. These are single-run developmental measurements, including skill-reading overhead.
 
 Enable the final profile with `IPYTHON_MCP_PROFILE=compact` and restart the server. Use the [repo skill](../../skills/ipython-mcp/SKILL.md), discovered through `.agents/skills/ipython-mcp`; its [helper example](../../skills/ipython-mcp/assets/helpers.py) can be adapted into project-owned snippets.

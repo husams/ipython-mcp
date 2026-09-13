@@ -1,32 +1,34 @@
 # ipython-mcp
 
 `ipython-mcp` exposes one persistent, trusted local IPython namespace through
-FastMCP. It is intended for an agent that needs to build state over several
-calls: variables, functions, classes, imports, and module state survive until
-the server lifespan ends or a non-cooperative operation forces worker recovery.
+FastMCP. Variables, functions, classes, imports, module state, and explicitly
+registered dynamic tools survive across calls until the server lifespan ends.
 
-FastMCP and the bounded admission controller stay in the parent process. The
-IPython shell, complete namespace, dynamic registry, history-disabled owner
-thread, and every live Python object stay in one lifespan-owned worker process.
-Only versioned, size-limited JSON protocol models cross that process boundary.
-MCP handlers await worker communication without blocking the parent event loop.
-Tool discovery, ping, and runtime status remain available during long-running
-Python execution.
-The worker is a reliability boundary that makes hard recovery possible; it is
-not a sandbox or a permission boundary.
+The FastMCP server owns one in-process IPython `InteractiveShell` on a dedicated
+worker thread. Python execution, namespace operations and teardown are
+serialized on that thread and awaited asynchronously. Tool discovery reads
+published schema snapshots without waiting for active Python execution, so
+`tools/list` and ping remain responsive during ordinary long-running work.
+Live Python objects stay in the process; there is no runtime child process or
+object-encoding protocol.
+
+This is intentionally not a sandbox. User Python has the server process's
+permissions. Once a call starts executing Python it runs until it returns or
+raises. Cancellation cannot terminate running Python; namespace execution and
+teardown stay serialized until it finishes. Native extensions that hold the
+GIL can still block the process. Code that never returns requires restarting
+the trusted local server.
 
 ## Install and run
 
-### From a source checkout
+From a source checkout:
 
 ```bash
-uv sync
+uv sync --extra dev
 uv run ipython-mcp
 ```
 
-For development dependencies, use `uv sync --extra dev`.
-
-### From the v0.1.0 wheel
+From a built wheel:
 
 ```bash
 uv build
@@ -34,157 +36,74 @@ uv tool install dist/ipython_mcp-0.1.0-py3-none-any.whl
 ipython-mcp
 ```
 
-The console entry point uses stdio and writes no non-protocol data to stdout.
-Operational logs, when enabled, go to stderr and contain metadata only.
+The console entry point uses stdio. It writes no non-protocol data to stdout;
+optional operational logs go to stderr and contain metadata only.
+User code receives EOF on stdin (`input()` raises `EOFError`). Owner operations
+isolate their standard streams from the transport; `execute` retains bounded
+stdout/stderr in its response, while other operations discard direct output.
 
-The entry point uses stdio, so configure it as a local MCP server in the client
-of your choice:
-
-```json
-{
-  "mcpServers": {
-    "ipython": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/ipython-mcp", "ipython-mcp"]
-    }
-  }
-}
-```
-
-## Codex setup
-
-Register a source checkout (replace the path with an absolute path):
+Register a source checkout with Codex (replace the path):
 
 ```bash
 codex mcp add ipython -- \
   uv run --directory /absolute/path/to/ipython-mcp ipython-mcp
 ```
 
-For a wheel installed with `uv tool install`, the shorter command is:
+For a wheel installed with `uv tool install`:
 
 ```bash
 codex mcp add ipython -- ipython-mcp
 ```
 
-Pass server settings without editing a file by repeating `--env` before `--`:
-
-```bash
-codex mcp add ipython \
-  --env IPYTHON_MCP_OPERATION_TIMEOUT_SECONDS=20 \
-  --env IPYTHON_MCP_PRELOAD_MODULES=math,json \
-  -- ipython-mcp
-```
-
-Equivalent project-scoped `.codex/config.toml` fields are:
-
-```toml
-[mcp_servers.ipython]
-command = "uv"
-args = ["run", "--directory", "/absolute/path/to/ipython-mcp", "ipython-mcp"]
-startup_timeout_sec = 15
-tool_timeout_sec = 45
-
-[mcp_servers.ipython.env]
-IPYTHON_MCP_OPERATION_TIMEOUT_SECONDS = "20"
-IPYTHON_MCP_PRELOAD_MODULES = "math,json"
-```
-
-Interactive Codex sessions retain their normal MCP approval policy. For a
-deliberately unattended acceptance run, pre-approve this server only for that
-invocation with
-`-c 'mcp_servers.ipython.default_tools_approval_mode="approve"'`; without that
-explicit override, `codex exec` running with approvals disabled cancels MCP
-tool calls instead of silently authorizing execution.
-
-Verify the stored entry with `codex mcp get ipython --json`, then open Codex
-and ask it to call `runtime_status`. Remove the entry with
-`codex mcp remove ipython`.
-
 ## Stable tool surface
 
-The default `full` profile publishes eleven stable tools. Registered live callables are
-additional, opt-in tools and are never published automatically:
+The default `full` profile publishes ten stable tools. Registered callables are additional,
+opt-in tools and are never published automatically.
 
-- `list` discovers visible functions with their current signatures, modules,
-  and docstrings.
-- `execute` runs expressions, statements, definitions, and multiline blocks in
-  the persistent IPython shell. It returns bounded stdout, stderr, display
-  data, final values, and structured failures.
-- `call_function` resolves a live name without `eval`, binds a JSON object as
-  keyword arguments, invokes the callable, and returns a JSON-compatible value.
-- `search` finds exact or partial names across functions, variables, modules,
-  types, and other visible objects with bounded metadata.
-- `reload` explicitly reloads named imported modules and refreshes their shell
-  binding. It never guesses at dependencies.
-- `inspect` resolves one live name and returns its kind, qualified type,
-  callable status, signature when available, module, documentation, and safe
-  representation. Text fields are bounded and the `truncated` object reports
-  `qualified_type`, `signature`, `module`, `documentation`, and
-  `representation` independently. Resolution, attribute access, metadata, and
-  representation failures are returned through the response's structured
-  `error` field; they do not stop the shared runtime.
-- `remove` accepts a list of top-level namespace names and deterministically
-  partitions unique requested names into `removed`, `refused`, and `unknown`.
-  Names beginning with `_`, IPython runtime bindings (`In`, `Out`,
-  `get_ipython`, `exit`, `quit`, and `open`), and active bindings for configured
-  preloaded or aliased modules are protected and therefore reported in
-  `refused`. Repeating a removal produces no additional removals.
-- `reset` removes every unprotected user-created top-level name, reports the
-  removed names in sorted order, restores configured module bindings, and
-  returns the unchanged monotonic `execution_count`. A repeated reset reports
-  no additional removals. All inspection and cleanup operations run through
-  the same serialized shell owner as execution.
-- `register_tool` publishes one top-level live callable. Its request is
-  `{"name": string, "tool_name": string | null, "description": string | null}`.
-  The default MCP name is exactly the backing symbol name. Success returns the
-  bounded description snapshot, deterministic input schema, SHA-256 schema
-  fingerprint, and registry revision; failure returns a structured error and
-  leaves that registration unchanged.
-- `unregister_tool` accepts `{"names": [tool_name, ...]}` and deterministically
-  reports unique names in the `unregistered` and `unknown` partitions. It is
-  idempotent and cannot remove a stable tool.
-- `runtime_status` is out of band from the namespace queue. It reports only
-  control-plane state (`ready`, `busy`, `recovering`, `unavailable`, or
-  `closed`), the runtime epoch, queue depth, active-operation flag, latest
-  interruption kind and namespace outcome, and measured replacement startup
-  time. It never returns code, arguments, results, or namespace values.
+- `list` returns visible callables with bounded signatures, modules, and docs.
+- `execute` runs expressions, statements, definitions, and multiline blocks;
+  it returns bounded stdout, stderr, display data, final values, and structured
+  failures.
+- `call_function` resolves a live callable without `eval`, binds a JSON object
+  as keyword arguments, and returns a JSON-compatible value.
+- `search` finds visible objects by exact or partial name with bounded metadata.
+- `reload` explicitly reloads named modules and refreshes shell bindings.
+- `inspect` returns one object's kind, type, signature, module, docs, and safe
+  representation with field-level truncation flags.
+- `remove` partitions unique top-level names into `removed`, `refused`, and
+  `unknown` while protecting IPython and configured module bindings.
+- `reset` removes unprotected user names, restores configured bindings, clears
+  dynamic registrations, and preserves the monotonic execution count.
+- `register_tool` explicitly publishes one supported top-level synchronous
+  callable with a deterministic JSON schema and fingerprint.
+- `unregister_tool` idempotently removes requested dynamic registrations.
+
+All ten paths use the same shell and registry. Live Python objects never cross
+a process boundary and response models contain no request, queue, worker,
+recovery, or epoch metadata.
 
 ## Compact profile and reusable agent workflows
 
-For routine Python work, start the smaller tool surface with:
+Set `IPYTHON_MCP_PROFILE=compact` and restart the server to expose only
+`execute` and `call_function`. This profile omits output schemas and returns a
+single minified JSON text block that Codex CLI can read. Empty protocol fields
+are omitted; user values such as `false`, `0`, `null`, empty containers, errors
+and truncation indicators remain intact. Use `full` for discovery,
+registration, cleanup and typed `structuredContent`.
 
-```bash
-IPYTHON_MCP_PROFILE=compact uv run ipython-mcp
-```
-
-The compact profile exposes `execute`, `call_function`, and `runtime_status`.
-It omits output schemas and returns one compact JSON text block, which Codex
-CLI can read directly. Empty protocol fields are omitted; user values such
-as `false`, `0`, `null`, and empty containers remain intact. Errors, truncation
-indicators, and namespace recovery information are retained. Each operation
-includes its runtime epoch so an agent can detect loss of live state. Use the
-default `full` profile for clients that require typed `structuredContent` or the complete
-discovery, registration, and cleanup surface. Profile changes require restart.
-
-The repository includes [the IPython skill](skills/ipython-mcp/SKILL.md),
-discovered by Codex through `.agents/skills/ipython-mcp`. Invoke `$ipython-mcp`
-in this repository; in another project, explicitly reference the skill's
-absolute path. It guides agents to load data once, keep shared objects between
-tool calls, return small summaries, and persist reusable functions as ordinary
-Python modules under the active project's `.ipython-mcp/snippets/` directory.
-The [example helpers](skills/ipython-mcp/assets/helpers.py) provide bounded CSV
-summaries. Use absolute paths because the MCP worker's working directory can
-differ from the agent's project.
-
-Smaller models can follow short stages with verification checkpoints; larger
-models can combine independent transformations. Both use the same tools and
-result contract. Snippet files survive new server processes; live variables
-and imports do not. Re-import saved modules in a fresh session instead of
-regenerating their source.
+The [repo skill](skills/ipython-mcp/SKILL.md) is discoverable through
+`.agents/skills/ipython-mcp`; invoke `$ipython-mcp` in this repository or
+reference its absolute path from another project. It teaches agents to load
+data once, retain live objects, batch helper calls with artifact writing and
+assertions, and return bounded summaries. Persist reusable helpers under the
+active project's `.ipython-mcp/snippets/` directory; the
+[example helper](skills/ipython-mcp/assets/helpers.py) provides a bounded CSV
+summary. Use absolute paths because the server's working directory can differ
+from the agent's. Snippet files survive server restarts; live objects do not.
 
 ### Measure with Codex CLI
 
-With the project's `.venv` installed and Codex already signed in, run:
+With the project's `.venv` installed and Codex already signed in:
 
 ```bash
 uv run --no-sync python scripts/codex_benchmark.py \
@@ -192,227 +111,181 @@ uv run --no-sync python scripts/codex_benchmark.py \
   --models gpt-5.6-luna gpt-6-astra --repeats 1
 ```
 
-Use a fresh output directory for each experiment. The harness runs the full
-profile without a skill and the compact profile with the repo skill. Each
-case loads a CSV into a shared namespace, reuses those objects in a later
-call, saves a parameterized helper, then starts a fresh Codex/MCP process to
-reuse the unchanged helper on another input. An independent interpreter
-checks results and helper hashes. The comparison includes skill-reading
-overhead and does not isolate the effect of the skill from the profile.
+Use a fresh output directory for each experiment. The harness compares the
+full profile without a skill against compact with the repo skill. Each case
+reuses live rows across calls, saves a helper, then starts a fresh Codex/MCP
+process to reuse that unchanged helper on another fixture. An independent
+interpreter checks outputs and helper hashes. Prompts, invocation arguments,
+raw events, actual token usage and correctness evidence are retained; a failed
+case returns a nonzero exit status. `--case MODEL/CONDITION` selects one case
+and `--timeout` bounds each CLI process.
 
-The runner retains prompts, invocation arguments, JSONL events, token usage,
-tool evidence, correctness checks, and summaries. It uses invocation-only
-MCP approval for the test server and the configured Codex account; it does
-not change global configuration. `--case MODEL/CONDITION` selects one case;
-`--timeout` bounds each CLI process. A failed case returns a nonzero exit.
-See the [measured results](benchmarks/2026-09-13-codex/report.md) for the
-tested CLI version, model results, and limitations.
-The final two-phase CLI runs used 10.3% fewer total tokens with Luna and 19.5%
-fewer with Astra than the full-profile baseline; all output and persistence
-checks passed. These are single-run measurements that include skill-reading
-overhead, not a guarantee for other tasks.
+The [earlier measurements](benchmarks/2026-09-13-codex/report.md) recorded
+10.3% and 19.5% fewer total tokens with Luna and Astra on the pre-integration
+worker-process revision. They include skill-reading overhead and are
+historical evidence, not measurements of the current in-process runtime.
+The [in-process CLI verification](benchmarks/2026-09-13-in-process/report.md)
+passed with both models, including unchanged helper reuse in a fresh session;
+its four compact-profile sessions consumed 284,054 total tokens including
+cached input. It does not provide a new full-profile comparison.
 
-## Deadlines, admission, and recovery
+## Optional startup task environment
 
-Every namespace read, mutation, registration change, and callable invocation
-receives a monotonic admission sequence and is dispatched FIFO. The active
-operation is not counted in the pending bound.
-The defaults allow 32 pending requests to absorb short bursts; they deliberately
-shed sustained slow load and do not promise that 32 near-30-second operations
-will eventually run.
+A server can prepare one named uv environment before constructing IPython. The
+environment lives under an explicit workspace outside the project. It is
+created without system site packages using the same Python major/minor as the
+server, or safely reused only when its recorded Python and canonical
+requirements fingerprint match.
 
-- A new request is rejected immediately with `runtime_busy` when the pending
-  queue is full. A request waiting more than 30 seconds returns `queue_timeout`.
-  These outcomes are retryable, do not execute code, and do not increment the
-  execution count. Time in the queue does not consume the operation deadline.
-- The 30-second operation deadline starts only when a request is dispatched.
-  MCP cancellation before dispatch removes exactly that queued admission.
-  Cancellation after dispatch follows the same interruption path as a timeout.
-- The controller first injects a cooperative interruption into the worker's
-  owner thread. State is reported as `preserved` only after the operation stops,
-  its late result is discarded, a health probe succeeds, and registry
-  reconciliation completes in the same process and epoch. Mutations performed
-  before interruption remain visible, including partially updated containers.
-- If the operation does not stop within the default two-second grace period,
-  the parent terminates the worker and starts an atomic replacement within the
-  default ten-second startup bound. The epoch advances, user names and dynamic
-  registrations are cleared, configured paths/preloads are restored, stale
-  results are discarded, and tool-list change is signaled when supported.
-- If initial or replacement startup fails, `runtime_status` reports
-  `unavailable` with a bounded error. Namespace operations fail deterministically
-  until the server lifespan is restarted; no partially initialized shell is used.
+Both `IPYTHON_MCP_ENVIRONMENT_WORKSPACE` and
+`IPYTHON_MCP_ACTIVE_ENVIRONMENT` are required to enable provisioning. When
+both are omitted, uv is never called and the ordinary in-process startup path
+is unchanged. Environment variables, trusted library paths, and preloads may
+still be used without a uv environment.
 
-Timeout responses use `operation_timeout`; active cancellations are recorded as
-`operation_cancelled`. Their `runtime` metadata names the request, admission
-sequence, epoch, queue wait, interruption kind, and `preserved`, `reset`, or
-`unknown` namespace outcome. Request code, arguments, captured values, and
-unbounded exception text are excluded from that metadata and from default logs.
+Example:
 
-## Output and shutdown bounds
+```bash
+codex mcp add ipython \
+  --env IPYTHON_MCP_ENVIRONMENT_WORKSPACE=/absolute/task-environments \
+  --env IPYTHON_MCP_ACTIVE_ENVIRONMENT=analytics-v1 \
+  --env 'IPYTHON_MCP_ENVIRONMENT_REQUIREMENTS=["polars==1.32.3"]' \
+  --env 'IPYTHON_MCP_ENVIRONMENT_VARIABLES={"TASK_MODE":"offline"}' \
+  --env IPYTHON_MCP_LIBRARY_PATHS=/absolute/agent-libraries \
+  --env IPYTHON_MCP_PRELOAD_MODULES=polars,my_agent_lib \
+  --env 'IPYTHON_MCP_MODULE_ALIASES={"polars":"pl","my_agent_lib":"lib"}' \
+  -- ipython-mcp
+```
 
-stdout and stderr are retained by streaming prefix sinks while output is
-produced. `truncated.stdout` / `truncated.stderr` identify truncation and
-`stdout_omitted_chars` / `stderr_omitted_chars` report exact omitted character
-counts. Display items are capped as they arrive and each retained data/metadata
-payload is normalized through the same JSON depth, item, and character limits.
-Results, representations, docs, signatures, error messages, filenames, and
-tracebacks expose deterministic field-level truncation flags where applicable.
+Equivalent project-scoped Codex configuration:
 
-When the MCP transport closes, admission stops atomically, queued requests
-complete as `runtime_closed`, active work is interrupted, and a non-cooperative
-worker is terminated after the grace period. Repeated close is safe. Teardown
-does not leave an IPython worker, owner thread, or history writer alive.
+```toml
+[mcp_servers.ipython]
+command = "ipython-mcp"
+startup_timeout_sec = 310
 
-## Dynamic tool contract
+[mcp_servers.ipython.env]
+IPYTHON_MCP_ENVIRONMENT_WORKSPACE = "/absolute/task-environments"
+IPYTHON_MCP_ACTIVE_ENVIRONMENT = "analytics-v1"
+IPYTHON_MCP_ENVIRONMENT_REQUIREMENTS = '["polars==1.32.3"]'
+IPYTHON_MCP_ENVIRONMENT_VARIABLES = '{"TASK_MODE":"offline"}'
+IPYTHON_MCP_LIBRARY_PATHS = "/absolute/agent-libraries"
+IPYTHON_MCP_PRELOAD_MODULES = "polars,my_agent_lib"
+IPYTHON_MCP_MODULE_ALIASES = '{"polars":"pl","my_agent_lib":"lib"}'
+```
 
-Registration is deliberately explicit. A backing name must be a top-level
-Python identifier, may not begin with `_`, and may not be an IPython runtime
-or configured module binding protected by `remove` and `reset`. Dotted names
-are not supported. An MCP tool name must start with an ASCII letter and then
-contain only ASCII letters, digits, `_`, or `-`. Names and descriptions are
-bounded by `IPYTHON_MCP_MAX_TOOL_NAME_CHARS` (default `64`) and
-`IPYTHON_MCP_MAX_TOOL_DESCRIPTION_CHARS` (default `1024`). The live catalog is
-bounded by `IPYTHON_MCP_MAX_DYNAMIC_TOOLS` (default `100`). Stable-name,
-dynamic-name, and backing-symbol collisions are rejected without mutation.
+Startup order is fixed:
 
-Dynamic tools initially support synchronous callables with positional-or-
-keyword and keyword-only parameters. Every parameter must have a resolvable
-annotation from this bounded set:
+1. Validate the workspace, safe environment name, bounded PEP 508
+   requirements, variables, paths, module names, and aliases.
+2. Create a temporary uv environment and atomically rename it into place, or
+   verify an existing environment's metadata.
+3. Prepend the selected site-packages, then apply configured variables and
+   trusted library paths.
+4. Import every preload and validate its unique, non-protected alias.
+5. Construct the only `InteractiveShell` and bind the preloaded modules.
 
-- `str`, `int`, `float`, `bool`, and `None`;
-- `list[T]`, `set[T]`, `frozenset[T]`, `tuple[T, ...]`, fixed tuples, and
-  `dict[str, T]`;
-- unions and optionals composed from supported types; and
-- `Literal` values containing JSON-compatible strings, numbers, booleans, or
-  `None`.
+The selected environment and all startup configuration are immutable for that
+server process. Change configuration by restarting the server. A different
+dependency set should use a new environment name; no environment create,
+switch, list, delete, or activate MCP tools exist.
 
-Synchronous classes are supported as callables. Their advertised parameters
-follow Python's `inspect.signature` constructor precedence: a custom metaclass
-`__call__`, then the effective `__new__` or `__init__` found through the class
-MRO. Class attribute annotations are not constructor parameters. Replacing or
-mutating any constructor callable consulted by that resolution triggers the
-same compatibility check as a function redefinition; an incompatible change
-makes the registration stale. Invoking a registered class still uses the
-normal JSON result boundary, so the constructed instance must be JSON-
-compatible or the call returns `result_not_json`.
+Configuration, path, uv, dependency, preload, or binding failures abort the
+lifespan before a shell is exposed. Temporary directories are removed, process
+environment and `sys.path` changes are rolled back, and the project is not
+modified. Diagnostics identify the failed phase, are bounded by
+`IPYTHON_MCP_MAX_TEXT_CHARS`, redact configured variable values and URL
+credentials, and are never persisted in the environment metadata.
 
-Required parameters have no default. Optional parameters include their exact
-JSON-compatible default in the advertised schema. Unannotated or unresolved
-parameters, unsupported annotations, non-JSON defaults, positional-only
-parameters, `*args`, `**kwargs`, coroutine functions, generators, async
-generators, and async/generator callable objects are rejected. Return
-annotations do not participate in registration compatibility.
-
-The schema fingerprint is SHA-256 over only the input schema serialized as
-sorted-key, compact JSON. Compatibility is intentionally strict: the new
-schema serialization and fingerprint must be byte-identical. Adding a
-parameter even with a default, removing or renaming one, changing a default,
-or changing an annotation makes the registration stale. A body-only change
-with the same schema remains callable and uses the current live binding.
-Description or docstring changes do not alter compatibility and do not update
-the registration-time description snapshot until explicit re-registration.
-
-Registry mutation, reconciliation, and dynamic invocation run on the same
-single-owner queue as IPython execution. MCP `tools/list` and tool lookup read
-the parent's last completed catalog snapshot without entering that queue.
-During execution, discovery returns the previously published catalog; completed
-operations refresh it before returning their results. Worker replacement
-clears it. Invocations still revalidate the live callable in the worker, so a
-cached schema cannot bypass stale-registration checks. The `list` tool reads
-the live Python namespace and therefore still waits for earlier execution.
-The common unchanged path compares callable identity plus a recursive
-signature-affecting token; wrapped callables and `functools.partial` functions,
-arguments, and keyword state are included. Dynamic calls revalidate the live
-binding and advertised schema, bind arguments, and invoke exactly once.
-
-An incompatible replacement disappears from fresh discovery and cached calls
-receive `stale_registration` until explicit re-registration. Deleting or
-removing a backing symbol invalidates it, `reset` invalidates the complete
-dynamic catalog, and `unregister_tool` removes only requested registrations.
-Catalog changes advance a monotonic revision and emit MCP
-`notifications/tools/list_changed` when the active session supports it. The
-registry belongs to the server lifespan: a new lifespan starts empty and
-teardown drops every registration.
-
-## Configuration
+## Configuration reference
 
 | Environment variable | Meaning |
 | --- | --- |
+| `IPYTHON_MCP_PROFILE` | `full` (default, ten tools) or `compact` (two tools, compact JSON text replies). |
+| `IPYTHON_MCP_ENVIRONMENT_WORKSPACE` | Absolute workspace outside the project; configure with `ACTIVE_ENVIRONMENT`. |
+| `IPYTHON_MCP_ACTIVE_ENVIRONMENT` | Safe environment name (`A-Z`, `a-z`, digits, `.`, `_`, `-`; at most 64 chars). |
+| `IPYTHON_MCP_ENVIRONMENT_REQUIREMENTS` | JSON array of bounded PEP 508 requirements; requires an active environment. |
+| `IPYTHON_MCP_ENVIRONMENT_VARIABLES` | JSON object of environment-variable string values applied before preloads. |
+| `IPYTHON_MCP_ENVIRONMENT_SETUP_TIMEOUT_SECONDS` | Positive finite timeout for each uv phase; default `300`. |
 | `IPYTHON_MCP_LIBRARY_PATHS` | Trusted library directories separated by the platform path separator. |
-| `IPYTHON_MCP_PRELOAD_MODULES` | Comma-separated modules imported at startup. |
-| `IPYTHON_MCP_MODULE_ALIASES` | JSON object mapping module names to namespace aliases. |
-| `IPYTHON_MCP_MAX_TEXT_CHARS` | Maximum returned text size; default `8192`. |
-| `IPYTHON_MCP_MAX_REPR_CHARS` | Maximum search representation size; default `1024`. |
-| `IPYTHON_MCP_MAX_TRACEBACK_CHARS` | Maximum returned traceback size; default `4096`. |
-| `IPYTHON_MCP_MAX_RESULTS` | Maximum retained items in lists, mappings, and result discovery; default `100`. |
-| `IPYTHON_MCP_MAX_DISPLAY_ITEMS` | Maximum display payloads retained per execution; default `20`. |
-| `IPYTHON_MCP_MAX_JSON_DEPTH` | Maximum nested JSON translation depth; default `6`. |
-| `IPYTHON_MCP_MAX_TOOL_NAME_CHARS` | Maximum dynamic MCP tool-name size; default `64`. |
-| `IPYTHON_MCP_MAX_TOOL_DESCRIPTION_CHARS` | Maximum registration description snapshot; default `1024`. |
-| `IPYTHON_MCP_PROFILE` | `full` (default, eleven tools) or `compact` (three tools with smaller JSON replies). |
-| `IPYTHON_MCP_MAX_DYNAMIC_TOOLS` | Maximum retained dynamic registrations; default `100`. |
-| `IPYTHON_MCP_OPERATION_TIMEOUT_SECONDS` | Positive finite dispatch-to-result deadline; default `30`. |
-| `IPYTHON_MCP_INTERRUPTION_GRACE_SECONDS` | Positive finite cooperative interruption grace; default `2`. |
-| `IPYTHON_MCP_WORKER_STARTUP_TIMEOUT_SECONDS` | Positive finite initial/replacement startup bound; default `10`. |
-| `IPYTHON_MCP_MAX_PENDING_OPERATIONS` | Positive pending FIFO capacity, excluding the active operation; default `32`. |
-| `IPYTHON_MCP_QUEUE_WAIT_TIMEOUT_SECONDS` | Positive finite admission wait bound; default `30`. |
-| `IPYTHON_MCP_MAX_IPC_MESSAGE_BYTES` | Positive bounded JSON IPC message size; default `4194304`. |
+| `IPYTHON_MCP_PRELOAD_MODULES` | Comma-separated modules imported before shell construction. |
+| `IPYTHON_MCP_MODULE_ALIASES` | JSON object mapping configured preload modules to unique safe bindings. |
+| `IPYTHON_MCP_MAX_TEXT_CHARS` | Returned text and startup-diagnostic bound; default `8192`. |
+| `IPYTHON_MCP_MAX_REPR_CHARS` | Representation bound; default `1024`. |
+| `IPYTHON_MCP_MAX_TRACEBACK_CHARS` | Traceback bound; default `4096`. |
+| `IPYTHON_MCP_MAX_RESULTS` | Retained collection/discovery items; default `100`. |
+| `IPYTHON_MCP_MAX_DISPLAY_ITEMS` | Retained display payloads per execution; default `20`. |
+| `IPYTHON_MCP_MAX_JSON_DEPTH` | Nested JSON translation depth; default `6`. |
+| `IPYTHON_MCP_MAX_TOOL_NAME_CHARS` | Dynamic MCP tool-name bound; default `64`. |
+| `IPYTHON_MCP_MAX_TOOL_DESCRIPTION_CHARS` | Dynamic description bound; default `1024`. |
+| `IPYTHON_MCP_MAX_DYNAMIC_TOOLS` | Dynamic registration bound; default `100`. |
 
-Every numeric setting must be positive; timeout values must also be finite.
+## Output, namespace, and logging bounds
+
+stdout and stderr use streaming prefix sinks whose retained memory is
+independent of produced output size. Exact omitted-character counts accompany
+their truncation flags. Display items are capped as they arrive. Results,
+representations, docs, signatures, filenames, error messages, and tracebacks
+use deterministic depth, item, and character bounds.
+
+Names beginning with `_`, IPython bindings (`In`, `Out`, `get_ipython`,
+`exit`, `quit`, and `open`), and configured preload aliases are protected from
+`remove`, `reset`, and dynamic registration. `reset` restores configured
+modules. Default logs contain tool name and outcome only—not code, arguments,
+results, namespace values, environment-variable values, or traceback locals.
+
+## Dynamic tool contract
+
+A backing name must be a non-protected top-level Python identifier. Dynamic
+tool names start with an ASCII letter and contain only letters, digits, `_`, or
+`-`. Stable-name, dynamic-name, and backing-symbol collisions are rejected.
+
+Supported parameters use resolvable annotations composed from `str`, `int`,
+`float`, `bool`, `None`, bounded containers, unions/optionals, and JSON-safe
+`Literal` values. Positional-only parameters, variadics, unresolved or
+unsupported annotations, non-JSON defaults, coroutine functions, generators,
+and async/generator callable objects are rejected.
+
+The schema fingerprint is SHA-256 over sorted compact input-schema JSON.
+Body-only replacement with an identical schema stays callable through the
+current live binding. A signature-affecting change makes the registration
+stale until explicit re-registration. Delete/remove invalidate the affected
+registration; reset clears the catalog. Catalog changes emit
+`notifications/tools/list_changed` when the client supports it.
+
+## Migration from the F-004 runtime
+
+F-005 is a deliberate breaking simplification. It removes the F-004
+multiprocessing worker, controller, versioned IPC, pipes, reader/writer loops,
+health probes, worker replacement, runtime epochs, stale-response handling,
+process admission queue, queue limits, worker startup/interruption grace,
+hard operation timeout recovery, worker shutdown logic, response `runtime`
+metadata, and `runtime_status` tool.
+
+Remove these obsolete settings from client configuration:
+
+- `IPYTHON_MCP_OPERATION_TIMEOUT_SECONDS`
+- `IPYTHON_MCP_INTERRUPTION_GRACE_SECONDS`
+- `IPYTHON_MCP_WORKER_STARTUP_TIMEOUT_SECONDS`
+- `IPYTHON_MCP_MAX_PENDING_OPERATIONS`
+- `IPYTHON_MCP_QUEUE_WAIT_TIMEOUT_SECONDS`
+- `IPYTHON_MCP_MAX_IPC_MESSAGE_BYTES`
+
+If callers relied on forced termination, queue overload responses, recovery
+epochs, or status polling, they must instead apply a client-side observation
+timeout and restart the entire trusted local server when code does not return.
+A client-side timeout does not imply that Python stopped.
 
 ## Build-import-edit-reload workflow
 
 1. Put a reusable module in a configured trusted library directory.
-2. Add its module name to `IPYTHON_MCP_PRELOAD_MODULES`, or import it with
-   `execute`.
+2. Preload it or import it with `execute`.
 3. Discover functions with `list` or `search` and call them with
    `call_function`.
-4. Edit the module using the agent's normal file tools.
-5. Call `reload` with the explicit module name and continue using the refreshed
-   binding.
+4. Edit the module using normal file tools.
+5. Call `reload` with the explicit module name.
 
-The worker executes trusted code with the server user's permissions. Dynamic
-registration does not add isolation: schema inspection, wrapped/partial state,
-default values, annotations, callable bodies, and result conversion are all
-trusted local Python. MCP and IPython do not provide a sandbox or isolation
-boundary for untrusted code.
-
-## Upgrade, remove, and troubleshoot
-
-For a source checkout, update the checkout through its normal distribution
-channel and run `uv sync --upgrade`. For a new wheel, reinstall explicitly:
-
-```bash
-uv tool install --reinstall dist/ipython_mcp-0.1.0-py3-none-any.whl
-```
-
-To remove both Codex wiring and a uv-tool installation:
-
-```bash
-codex mcp remove ipython
-uv tool uninstall ipython-mcp
-```
-
-Common checks:
-
-- `codex mcp get ipython --json` verifies the launcher, arguments, and env.
-- If startup is `unavailable`, inspect the bounded `runtime_status.error` and
-  verify every configured library directory and preload import in a clean shell.
-- `runtime_busy` means the pending bound is full; retry after the reported
-  interval. `queue_timeout` means the call never dispatched and is safe to retry.
-- `operation_timeout` with `preserved` retains the same objects (including
-  partial mutations). With `reset`, recreate user state and re-register tools.
-- A client-side MCP timeout should exceed the configured operation deadline and
-  interruption grace so the structured recovery response can be delivered.
-
-## Compatibility and local release verification
-
-v0.1.0 is locally tested with uv-managed CPython 3.11, 3.12, and 3.13 against
-the lowest declared FastMCP/IPython/Pydantic set and the locked compatible set.
-The supported macOS Codex smoke was recorded with `codex-cli 0.146.0`; newer
-Codex releases should use the same stable MCP configuration surface. CPython
-3.14, remote transports, multi-user hosting, package-index publication, signing,
-and hosted CI are not claimed by this release.
+## Verification
 
 Repository-native checks are:
 
@@ -423,14 +296,9 @@ uv run python scripts/release_matrix.py
 uv build
 ```
 
-Run one matrix cell with, for example,
-`uv run python scripts/release_matrix.py --python 3.11 --set lowest`. This
-checkout intentionally has no Git repository, remote, or CI service; the six
-matrix cells and Codex smoke are local release evidence, not CI claims.
-
-## Development
-
-```bash
-uv sync --extra dev
-uv run pytest
-```
+The tests cover the unconfigured startup path, direct same-process ownership,
+persistent state and dynamic tools, absence of runtime child processes and IPC
+modules, output bounds, startup variables/paths/preloads, uv reuse, conflicting
+pure-Python dependency versions across separate restarts, clean/redacted
+failures, stdio packaging flow, the non-preemptive cancellation contract,
+responsive discovery during execution, and compact output compatibility.

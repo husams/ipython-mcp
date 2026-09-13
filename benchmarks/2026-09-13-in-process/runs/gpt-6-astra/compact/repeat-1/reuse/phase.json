@@ -1,0 +1,79 @@
+{
+  "duration_seconds": 25.63937,
+  "errors": [],
+  "last_message": "Created reuse.json with one MCP execute call; no prior module state existed, and the helper remained byte-for-byte unchanged.",
+  "mcp_tool_calls": 1,
+  "mcp_tool_evidence": [
+    {
+      "arguments": {
+        "code": "import sys\nimport json\nimport hashlib\nfrom pathlib import Path\nimport importlib\n\n_reuse_root = Path('/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-6-astra/compact/repeat-1')\n_reuse_helper = _reuse_root / '.ipython-mcp/snippets/order_report.py'\n_reuse_before = hashlib.sha256(_reuse_helper.read_bytes()).hexdigest()\n_reuse_module_cached = 'order_report' in sys.modules\n_reuse_live_function = callable(globals().get('report_orders'))\nif str(_reuse_helper.parent) not in sys.path:\n    sys.path.insert(0, str(_reuse_helper.parent))\n_reuse_module = importlib.import_module('order_report')\nassert Path(_reuse_module.__file__).resolve() == _reuse_helper.resolve()\n_reuse_result = _reuse_module.report_orders(str(_reuse_root / 'orders_reuse.csv'))\n_reuse_output = _reuse_root / 'reuse.json'\n_reuse_output.write_text(json.dumps(_reuse_result), encoding='utf-8')\nassert _reuse_output.read_text(encoding='utf-8') == json.dumps(_reuse_result)\nassert hashlib.sha256(_reuse_helper.read_bytes()).hexdigest() == _reuse_before\n{'output': str(_reuse_output), 'module_reused': _reuse_module_cached, 'prior_live_report_orders': _reuse_live_function, 'helper_unchanged': True, 'result_type': type(_reuse_result).__name__}"
+      },
+      "error": null,
+      "result": {
+        "execution_count": 1,
+        "ok": true,
+        "result": {
+          "helper_unchanged": true,
+          "module_reused": false,
+          "output": "/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-6-astra/compact/repeat-1/reuse.json",
+          "prior_live_report_orders": false,
+          "result_type": "dict"
+        },
+        "status": "ok"
+      },
+      "status": "completed",
+      "successful": true,
+      "tool": "execute"
+    }
+  ],
+  "mcp_tool_failures": 0,
+  "mcp_tool_names": [
+    "execute"
+  ],
+  "mcp_tool_successes": 1,
+  "returncode": 0,
+  "state_usage": {
+    "evidence": [
+      {
+        "arguments": {
+          "code": "import sys\nimport json\nimport hashlib\nfrom pathlib import Path\nimport importlib\n\n_reuse_root = Path('/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-6-astra/compact/repeat-1')\n_reuse_helper = _reuse_root / '.ipython-mcp/snippets/order_report.py'\n_reuse_before = hashlib.sha256(_reuse_helper.read_bytes()).hexdigest()\n_reuse_module_cached = 'order_report' in sys.modules\n_reuse_live_function = callable(globals().get('report_orders'))\nif str(_reuse_helper.parent) not in sys.path:\n    sys.path.insert(0, str(_reuse_helper.parent))\n_reuse_module = importlib.import_module('order_report')\nassert Path(_reuse_module.__file__).resolve() == _reuse_helper.resolve()\n_reuse_result = _reuse_module.report_orders(str(_reuse_root / 'orders_reuse.csv'))\n_reuse_output = _reuse_root / 'reuse.json'\n_reuse_output.write_text(json.dumps(_reuse_result), encoding='utf-8')\nassert _reuse_output.read_text(encoding='utf-8') == json.dumps(_reuse_result)\nassert hashlib.sha256(_reuse_helper.read_bytes()).hexdigest() == _reuse_before\n{'output': str(_reuse_output), 'module_reused': _reuse_module_cached, 'prior_live_report_orders': _reuse_live_function, 'helper_unchanged': True, 'result_type': type(_reuse_result).__name__}"
+        },
+        "error": null,
+        "result": {
+          "execution_count": 1,
+          "ok": true,
+          "result": {
+            "helper_unchanged": true,
+            "module_reused": false,
+            "output": "/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-6-astra/compact/repeat-1/reuse.json",
+            "prior_live_report_orders": false,
+            "result_type": "dict"
+          },
+          "status": "ok"
+        },
+        "status": "completed",
+        "successful": true,
+        "tool": "execute"
+      }
+    ],
+    "failed_tool_calls": 0,
+    "mcp_tool_call_count": 1,
+    "successful_tool_calls": 1,
+    "tool_names": [
+      "execute"
+    ]
+  },
+  "status": "success",
+  "timed_out": false,
+  "turn_completed": true,
+  "usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 33664,
+    "input_tokens": 52216,
+    "output_tokens": 465,
+    "reasoning_output_tokens": 0,
+    "total_tokens": 52681,
+    "uncached_input_tokens": 18552
+  },
+  "usage_status": "available"
+}

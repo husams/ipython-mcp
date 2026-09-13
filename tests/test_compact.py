@@ -7,7 +7,7 @@ from fastmcp import Client
 
 from ipython_mcp.compact import as_tool_result
 from ipython_mcp.config import ServerConfig
-from ipython_mcp.models import ErrorInfo, ExecuteResponse, RuntimeMetadata
+from ipython_mcp.models import ErrorInfo, ExecuteResponse
 from ipython_mcp.server import create_server
 
 
@@ -26,40 +26,35 @@ def compact_data(response):
     return json.loads(response.content[0].text)
 
 
-def test_compact_profile_has_three_small_tools_and_shorter_replies():
+def test_compact_profile_has_two_small_tools_and_shorter_replies():
     async def scenario():
         async with Client(create_server(ServerConfig(profile="full"))) as full:
-            async with Client(
-                create_server(ServerConfig(profile="compact"))
-            ) as compact:
-                full_tools = await full.list_tools()
-                compact_tools = await compact.list_tools()
-                assert {tool.name for tool in full_tools} == {
-                    "list",
-                    "execute",
-                    "call_function",
-                    "search",
-                    "reload",
-                    "inspect",
-                    "remove",
-                    "reset",
-                    "register_tool",
-                    "unregister_tool",
-                    "runtime_status",
-                }
-                assert {tool.name for tool in compact_tools} == {
-                    "execute",
-                    "call_function",
-                    "runtime_status",
-                }
-                assert all(tool.outputSchema is None for tool in compact_tools)
-                full_reply = await call_tool(full, "execute", {"code": "value = 1"})
-                compact_reply = await call_tool(
-                    compact, "execute", {"code": "value = 1"}
-                )
-                full_size = len(json.dumps(full_reply.structured_content))
-                compact_size = len(compact_reply.content[0].text)
-                assert compact_size < full_size
+            full_tools = await full.list_tools()
+            assert {tool.name for tool in full_tools} == {
+                "list",
+                "execute",
+                "call_function",
+                "search",
+                "reload",
+                "inspect",
+                "remove",
+                "reset",
+                "register_tool",
+                "unregister_tool",
+            }
+            full_reply = await call_tool(full, "execute", {"code": "value = 1"})
+
+        async with Client(create_server(ServerConfig(profile="compact"))) as compact:
+            compact_tools = await compact.list_tools()
+            assert {tool.name for tool in compact_tools} == {
+                "execute",
+                "call_function",
+            }
+            assert all(tool.outputSchema is None for tool in compact_tools)
+            compact_reply = await call_tool(compact, "execute", {"code": "value = 1"})
+            full_size = len(json.dumps(full_reply.structured_content))
+            compact_size = len(compact_reply.content[0].text)
+            assert compact_size < full_size
 
     run(scenario())
 
@@ -104,7 +99,7 @@ def test_compact_preserves_falsy_results_and_nested_user_fields():
     run(scenario())
 
 
-def test_compact_keeps_error_truncation_and_recovery_metadata():
+def test_compact_keeps_error_and_truncation_fields():
     response = ExecuteResponse(
         ok=False,
         status="error",
@@ -114,13 +109,6 @@ def test_compact_keeps_error_truncation_and_recovery_metadata():
             retryable=True,
             retry_after_seconds=0.5,
             traceback_truncated=True,
-        ),
-        runtime=RuntimeMetadata(
-            request_id="secret-id",
-            admission_sequence=4,
-            epoch=7,
-            interruption_kind="operation_timeout",
-            namespace_state="reset",
         ),
     )
     wire = as_tool_result(response)
@@ -133,11 +121,6 @@ def test_compact_keeps_error_truncation_and_recovery_metadata():
             "retryable": True,
             "retry_after_seconds": 0.5,
             "traceback_truncated": True,
-        },
-        "runtime": {
-            "epoch": 7,
-            "interruption_kind": "operation_timeout",
-            "namespace_state": "reset",
         },
     }
     empty_error = as_tool_result(
@@ -165,7 +148,7 @@ def test_compact_mcp_bounds_stdout_and_result_with_flags():
     run(scenario())
 
 
-def test_compact_runtime_status_remains_responsive_while_execute_is_busy():
+def test_compact_tools_list_remains_responsive_while_execute_is_pending():
     async def scenario():
         async with Client(create_server(ServerConfig(profile="compact"))) as client:
             pending = asyncio.create_task(
@@ -175,16 +158,10 @@ def test_compact_runtime_status_remains_responsive_while_execute_is_busy():
                     {"code": "import time; time.sleep(0.3)"},
                 )
             )
-            for _ in range(100):
-                status = compact_data(await call_tool(client, "runtime_status"))
-                if status.get("operation_active"):
-                    assert status["state"] == "busy"
-                    break
-                await asyncio.sleep(0.005)
-            else:
-                raise AssertionError(
-                    "compact runtime status did not observe busy state"
-                )
+            await asyncio.sleep(0.02)
+            tools = await asyncio.wait_for(client.list_tools(), timeout=0.1)
+            assert {tool.name for tool in tools} == {"execute", "call_function"}
+            assert not pending.done()
             await asyncio.wait_for(pending, timeout=2)
 
     run(scenario())

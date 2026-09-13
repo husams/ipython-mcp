@@ -9,9 +9,6 @@ from fastmcp.tools import ToolResult
 from mcp.types import TextContent
 from pydantic import BaseModel
 
-from .models import RuntimeStatusResponse
-
-
 def _compact_error(error: dict[str, Any] | None) -> dict[str, Any] | None:
     if not error:
         return None
@@ -46,21 +43,6 @@ def _compact_error(error: dict[str, Any] | None) -> dict[str, Any] | None:
     return result or None
 
 
-def _compact_runtime(runtime: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not runtime:
-        return None
-    # Epoch is deliberately retained on every operation response.  It is the
-    # one inexpensive signal that tells an agent its namespace was replaced.
-    result: dict[str, Any] = {"epoch": runtime["epoch"]}
-    if runtime.get("queue_wait_seconds", 0):
-        result["queue_wait_seconds"] = runtime["queue_wait_seconds"]
-    if runtime.get("interruption_kind") is not None:
-        result["interruption_kind"] = runtime["interruption_kind"]
-    if runtime.get("namespace_state", "unchanged") != "unchanged":
-        result["namespace_state"] = runtime["namespace_state"]
-    return result
-
-
 def _compact_truncation(
     truncated: dict[str, Any] | bool | None,
 ) -> dict[str, Any] | bool | None:
@@ -75,28 +57,6 @@ def compact_response(value: BaseModel) -> dict[str, Any]:
 
     data = value.model_dump(mode="json")
     fields = value.model_fields_set
-
-    if isinstance(value, RuntimeStatusResponse):
-        result: dict[str, Any] = {
-            "state": data["state"],
-            "epoch": data["epoch"],
-        }
-        if data["queue_depth"]:
-            result["queue_depth"] = data["queue_depth"]
-        if data["operation_active"]:
-            result["operation_active"] = True
-        if data["latest_interruption_kind"] is not None:
-            result["latest_interruption_kind"] = data["latest_interruption_kind"]
-        if data["latest_namespace_state"] != "unchanged":
-            result["latest_namespace_state"] = data["latest_namespace_state"]
-        if data["replacement_startup_seconds"] is not None:
-            result["replacement_startup_seconds"] = data[
-                "replacement_startup_seconds"
-            ]
-        error = _compact_error(data.get("error"))
-        if error is not None:
-            result["error"] = error
-        return result
 
     result = {}
     for key in ("ok", "status", "name"):
@@ -117,9 +77,6 @@ def compact_response(value: BaseModel) -> dict[str, Any]:
     truncated = _compact_truncation(data.get("truncated"))
     if truncated is not None:
         result["truncated"] = truncated
-    runtime = _compact_runtime(data.get("runtime"))
-    if runtime is not None:
-        result["runtime"] = runtime
     for key in ("name_truncated",):
         if data.get(key):
             result[key] = True

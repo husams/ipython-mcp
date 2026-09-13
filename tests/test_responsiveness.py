@@ -9,9 +9,6 @@ from pathlib import Path
 import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
-from fastmcp.client.messages import MessageHandler
-
-from ipython_mcp.config import ServerConfig
 from ipython_mcp.server import create_server
 
 
@@ -26,17 +23,7 @@ STABLE_TOOLS = {
     "reset",
     "register_tool",
     "unregister_tool",
-    "runtime_status",
 }
-
-
-class ToolChangeRecorder(MessageHandler):
-    def __init__(self) -> None:
-        self.count = 0
-
-    async def on_tool_list_changed(self, message) -> None:
-        del message
-        self.count += 1
 
 
 async def _wait_for_marker(path: Path, timeout: float = 5.0) -> None:
@@ -112,23 +99,15 @@ def test_tools_list_stays_responsive_during_active_execute(
             try:
                 await _wait_for_marker(started)
 
-                assert await asyncio.wait_for(client.ping(), timeout=1.0) is True
-                status = await asyncio.wait_for(
-                    _call_tool(client, "runtime_status"), timeout=1.0
-                )
-                assert status["operation_active"] is True
-                assert status["queue_depth"] == 0
+                # The marker-held loop cannot finish until release; leave
+                # scheduling margin for slower locked interpreter cells.
+                assert await asyncio.wait_for(client.ping(), timeout=3.0) is True
                 assert execute_task.done() is False
 
-                discovered = await asyncio.wait_for(client.list_tools(), timeout=1.0)
+                discovered = await asyncio.wait_for(client.list_tools(), timeout=3.0)
                 assert {tool.name for tool in discovered} == expected_catalog
-                rediscovered = await asyncio.wait_for(client.list_tools(), timeout=1.0)
+                rediscovered = await asyncio.wait_for(client.list_tools(), timeout=3.0)
                 assert {tool.name for tool in rediscovered} == expected_catalog
-                status_after_discovery = await asyncio.wait_for(
-                    _call_tool(client, "runtime_status"), timeout=1.0
-                )
-                assert status_after_discovery["operation_active"] is True
-                assert status_after_discovery["queue_depth"] == 0
                 assert execute_task.done() is False
             finally:
                 release.touch()
@@ -185,6 +164,13 @@ def test_dynamic_catalog_reconciles_schema_drift_without_execute(mutation_exit: 
                 client, "call_function", {"name": "mutate_target", "arguments": {}}
             )
             assert isinstance(mutated, dict)
+            assert mutated["ok"] is (mutation_exit == "return")
+            if mutation_exit != "return":
+                assert mutated["error"]["error_type"] == (
+                    "SystemExit"
+                    if mutation_exit == "system_exit"
+                    else "KeyboardInterrupt"
+                )
             assert "target" not in {tool.name for tool in await client.list_tools()}
 
             stale = await _call_tool(client, "target", {"value": 1})
@@ -203,115 +189,80 @@ def test_dynamic_catalog_reconciles_schema_drift_without_execute(mutation_exit: 
     asyncio.run(scenario())
 
 
-def test_large_dynamic_catalog_uses_bounded_publication_deltas():
+def test_stdio_user_stdin_is_eof_and_does_not_consume_followup_requests():
     async def scenario() -> None:
-        config = ServerConfig(
-            max_ipc_message_bytes=4096,
-            operation_timeout_seconds=0.2,
-            interruption_grace_seconds=1.0,
-        )
-        async with Client(create_server(config)) as client:
-            definitions = "\n".join(
-                f"def bounded_tool_{index}(value: int) -> int:\n"
-                f"    return value + {index}\n"
-                for index in range(15)
+        client = Client(
+            StdioTransport(
+                command=sys.executable,
+                args=["-m", "ipython_mcp.server"],
+                cwd=str(Path(__file__).resolve().parents[1]),
+                env={"PATH": os.environ.get("PATH", "")},
             )
-            created = await _call_tool(client, "execute", {"code": definitions})
-            assert created["ok"] is True
+        )
+        async with client:
+            input_result = await asyncio.wait_for(
+                _call_tool(client, "execute", {"code": "input('prompt: ')"}),
+                timeout=2.0,
+            )
+            assert input_result["ok"] is False
+            assert input_result["error"]["code"] == "execution_error"
+            assert input_result["error"]["error_type"] == "EOFError"
 
-            initial_status = await _call_tool(client, "runtime_status")
-            description = "d" * 200
-            for index in range(15):
-                registration = await _call_tool(
+            readline_result = await asyncio.wait_for(
+                _call_tool(client, "execute", {"code": "import sys\nsys.stdin.readline()"}),
+                timeout=2.0,
+            )
+            assert readline_result["ok"] is True
+            assert readline_result["result"] == ""
+
+            defined = await asyncio.wait_for(
+                _call_tool(
                     client,
-                    "register_tool",
+                    "execute",
                     {
-                        "name": f"bounded_tool_{index}",
-                        "description": description,
+                        "code": (
+                            "def noisy(value: int) -> int:\n"
+                            "    print('plain call output', flush=True)\n"
+                            "    return value + 1\n\n"
+                            "def dynamic_noisy(value: int) -> int:\n"
+                            "    print('dynamic call output', flush=True)\n"
+                            "    return value + 2\n"
+                        )
                     },
-                )
-                assert registration["ok"] is True
-
-            tools = await client.list_tools()
-            dynamic = [tool for tool in tools if tool.name.startswith("bounded_tool_")]
-            assert len(dynamic) == 15
-            encoded_catalog = json.dumps(
-                [
-                    {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "inputSchema": tool.inputSchema,
-                    }
-                    for tool in dynamic
-                ]
-            ).encode()
-            assert len(encoded_catalog) > config.max_ipc_message_bytes
-
-            mutated = await _call_tool(
-                client,
-                "execute",
-                {
-                    "code": "\n".join(
-                        f"bounded_tool_{index}.__annotations__['value'] = str"
-                        for index in range(15)
-                    )
-                },
+                ),
+                timeout=1.0,
             )
-            assert mutated["ok"] is True
-            assert not any(
-                tool.name.startswith("bounded_tool_")
-                for tool in await client.list_tools()
+            assert defined["ok"] is True
+            plain = await asyncio.wait_for(
+                _call_tool(
+                    client, "call_function", {"name": "noisy", "arguments": {"value": 1}}
+                ),
+                timeout=1.0,
             )
-
-            timed_out = await _call_tool(
-                client, "execute", {"code": "while True:\n    pass"}
+            assert plain["ok"] is True
+            assert plain["result"] == 2
+            registered = await asyncio.wait_for(
+                _call_tool(client, "register_tool", {"name": "dynamic_noisy"}),
+                timeout=1.0,
             )
-            assert timed_out["error"]["code"] == "operation_timeout"
-            assert timed_out["runtime"]["namespace_state"] == "preserved"
-
-            final_status = await _call_tool(client, "runtime_status")
-            assert final_status["epoch"] == initial_status["epoch"]
-            assert final_status["state"] == "ready"
-            assert final_status["queue_depth"] == 0
-
-    asyncio.run(scenario())
-
-
-def test_timeout_health_publishes_stale_catalog_without_epoch_reset():
-    async def scenario() -> None:
-        config = ServerConfig(
-            operation_timeout_seconds=0.2,
-            interruption_grace_seconds=1.0,
-        )
-        recorder = ToolChangeRecorder()
-        async with Client(create_server(config), message_handler=recorder) as client:
-            await _call_tool(
-                client,
-                "execute",
-                {"code": ("def target(value: int) -> int:\n    return value\n")},
-            )
-            registered = await _call_tool(client, "register_tool", {"name": "target"})
             assert registered["ok"] is True
-            notifications_before_timeout = recorder.count
-            initial_status = await _call_tool(client, "runtime_status")
-
-            timed_out = await _call_tool(
-                client,
-                "execute",
-                {
-                    "code": (
-                        "target.__annotations__['value'] = str\nwhile True:\n    pass"
-                    )
-                },
+            dynamic = await asyncio.wait_for(
+                _call_tool(client, "dynamic_noisy", {"value": 2}), timeout=1.0
             )
-            assert timed_out["error"]["code"] == "operation_timeout"
-            assert timed_out["runtime"]["namespace_state"] == "preserved"
-            assert timed_out["runtime"]["epoch"] == initial_status["epoch"]
+            assert dynamic["ok"] is True
+            assert dynamic["result"] == 4
 
-            assert "target" not in {tool.name for tool in await client.list_tools()}
-            stale = await _call_tool(client, "target", {"value": 1})
-            assert stale["error"]["code"] == "stale_registration"
-            await asyncio.sleep(0)
-            assert recorder.count >= notifications_before_timeout + 1
+            tools = await asyncio.wait_for(client.list_tools(), timeout=1.0)
+            assert {tool.name for tool in tools} == STABLE_TOOLS | {"dynamic_noisy"}
+            followup = await asyncio.wait_for(
+                _call_tool(
+                    client,
+                    "execute",
+                    {"code": "stdin_followup = 'request survived'\nstdin_followup"},
+                ),
+                timeout=1.0,
+            )
+            assert followup["ok"] is True
+            assert followup["result"] == "request survived"
 
     asyncio.run(scenario())

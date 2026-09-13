@@ -1,0 +1,338 @@
+matrix python=3.11 dependencies=lowest
+...............................................................          [100%]
+matrix python=3.11 dependencies=locked
+................................F..............................          [100%]
+=================================== FAILURES ===================================
+______ test_tools_list_stays_responsive_during_active_execute[cpu-stdio] _______
+
+fut = <Task cancelled name='Task-181' coro=<Client.ping() done, defined at /private/tmp/ipython-mcp-uv-cache/archive-v0/Cl2kQz-xSnCy1mtUZaGgl/lib/python3.11/site-packages/fastmcp/client/client.py:804>>
+timeout = 1.0
+
+    async def wait_for(fut, timeout):
+        """Wait for the single Future or coroutine to complete, with timeout.
+    
+        Coroutine will be wrapped in Task.
+    
+        Returns result of the Future or coroutine.  When a timeout occurs,
+        it cancels the task and raises TimeoutError.  To avoid the task
+        cancellation, wrap it in shield().
+    
+        If the wait is cancelled, the task is also cancelled.
+    
+        This function is a coroutine.
+        """
+        loop = events.get_running_loop()
+    
+        if timeout is None:
+            return await fut
+    
+        if timeout <= 0:
+            fut = ensure_future(fut, loop=loop)
+    
+            if fut.done():
+                return fut.result()
+    
+            await _cancel_and_wait(fut, loop=loop)
+            try:
+                return fut.result()
+            except exceptions.CancelledError as exc:
+                raise exceptions.TimeoutError() from exc
+    
+        waiter = loop.create_future()
+        timeout_handle = loop.call_later(timeout, _release_waiter, waiter)
+        cb = functools.partial(_release_waiter, waiter)
+    
+        fut = ensure_future(fut, loop=loop)
+        fut.add_done_callback(cb)
+    
+        try:
+            # wait until the future completes or the timeout
+            try:
+                await waiter
+            except exceptions.CancelledError:
+                if fut.done():
+                    return fut.result()
+                else:
+                    fut.remove_done_callback(cb)
+                    # We must ensure that the task is not running
+                    # after wait_for() returns.
+                    # See https://bugs.python.org/issue32751
+                    await _cancel_and_wait(fut, loop=loop)
+                    raise
+    
+            if fut.done():
+                return fut.result()
+            else:
+                fut.remove_done_callback(cb)
+                # We must ensure that the task is not running
+                # after wait_for() returns.
+                # See https://bugs.python.org/issue32751
+                await _cancel_and_wait(fut, loop=loop)
+                # In case task cancellation failed with some
+                # exception, we should re-raise it
+                # See https://bugs.python.org/issue40607
+                try:
+>                   return fut.result()
+                           ^^^^^^^^^^^^
+
+../../.local/share/uv/python/cpython-3.11.12-macos-aarch64-none/lib/python3.11/asyncio/tasks.py:500: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/private/tmp/ipython-mcp-uv-cache/archive-v0/Cl2kQz-xSnCy1mtUZaGgl/lib/python3.11/site-packages/fastmcp/client/client.py:806: in ping
+    result = await self._await_with_session_monitoring(self.session.send_ping())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/private/tmp/ipython-mcp-uv-cache/archive-v0/Cl2kQz-xSnCy1mtUZaGgl/lib/python3.11/site-packages/fastmcp/client/client.py:751: in _await_with_session_monitoring
+    done, _ = await asyncio.wait(
+../../.local/share/uv/python/cpython-3.11.12-macos-aarch64-none/lib/python3.11/asyncio/tasks.py:428: in wait
+    return await _wait(fs, timeout, return_when, loop)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+fs = {<Task cancelled name='Task-182' coro=<ClientSession.send_ping() done, defined at /private/tmp/ipython-mcp-uv-cache/ar...-mcp-uv-cache/archive-v0/Cl2kQz-xSnCy1mtUZaGgl/lib/python3.11/site-packages/fastmcp/client/client.py:686> result=None>}
+timeout = None, return_when = 'FIRST_COMPLETED'
+loop = <_UnixSelectorEventLoop running=False closed=True debug=False>
+
+    async def _wait(fs, timeout, return_when, loop):
+        """Internal helper for wait().
+    
+        The fs argument must be a collection of Futures.
+        """
+        assert fs, 'Set of Futures is empty.'
+        waiter = loop.create_future()
+        timeout_handle = None
+        if timeout is not None:
+            timeout_handle = loop.call_later(timeout, _release_waiter, waiter)
+        counter = len(fs)
+    
+        def _on_completion(f):
+            nonlocal counter
+            counter -= 1
+            if (counter <= 0 or
+                return_when == FIRST_COMPLETED or
+                return_when == FIRST_EXCEPTION and (not f.cancelled() and
+                                                    f.exception() is not None)):
+                if timeout_handle is not None:
+                    timeout_handle.cancel()
+                if not waiter.done():
+                    waiter.set_result(None)
+    
+        for f in fs:
+            f.add_done_callback(_on_completion)
+    
+        try:
+>           await waiter
+E           asyncio.exceptions.CancelledError
+
+../../.local/share/uv/python/cpython-3.11.12-macos-aarch64-none/lib/python3.11/asyncio/tasks.py:535: CancelledError
+
+The above exception was the direct cause of the following exception:
+
+tmp_path = PosixPath('/private/var/folders/07/p__xlp357ps_8_fb3yhffmrh0000gn/T/pytest-of-husam/pytest-181/test_tools_list_stays_responsi3')
+transport_kind = 'stdio', hold_mode = 'cpu'
+
+    @pytest.mark.parametrize("transport_kind", ("in_memory", "stdio"))
+    @pytest.mark.parametrize("hold_mode", ("sleep", "cpu"))
+    def test_tools_list_stays_responsive_during_active_execute(
+        tmp_path: Path, transport_kind: str, hold_mode: str
+    ):
+        async def scenario() -> None:
+            started = tmp_path / "execute.started"
+            release = tmp_path / "execute.release"
+            started_literal = json.dumps(str(started))
+            release_literal = json.dumps(str(release))
+            hold_body = (
+                "    time.sleep(0.01)\n"
+                if hold_mode == "sleep"
+                else "    sum(range(10000))\n"
+            )
+            hold_code = (
+                "import time\n"
+                "from pathlib import Path\n"
+                f"_responsiveness_started = Path({started_literal})\n"
+                f"_responsiveness_release = Path({release_literal})\n"
+                "_responsiveness_started.write_text('started', encoding='utf-8')\n"
+                "while not _responsiveness_release.exists():\n" + hold_body + "'released'"
+            )
+    
+            if transport_kind == "in_memory":
+                client = Client(create_server())
+            else:
+                client = Client(
+                    StdioTransport(
+                        command=sys.executable,
+                        args=["-m", "ipython_mcp.server"],
+                        cwd=str(Path(__file__).resolve().parents[1]),
+                        env={"PATH": os.environ.get("PATH", "")},
+                    )
+                )
+    
+            async with client:
+                await _call_tool(
+                    client,
+                    "execute",
+                    {
+                        "code": (
+                            "def registered_tool(value: int) -> int:\n"
+                            "    return value + 1\n"
+                        )
+                    },
+                )
+                registered = await _call_tool(
+                    client, "register_tool", {"name": "registered_tool"}
+                )
+                assert registered["ok"] is True
+                expected_catalog = STABLE_TOOLS | {"registered_tool"}
+                assert {tool.name for tool in await client.list_tools()} == expected_catalog
+    
+                execute_task = asyncio.create_task(
+                    _call_tool(client, "execute", {"code": hold_code})
+                )
+                try:
+                    await _wait_for_marker(started)
+    
+                    assert await asyncio.wait_for(client.ping(), timeout=1.0) is True
+                    assert execute_task.done() is False
+    
+                    discovered = await asyncio.wait_for(client.list_tools(), timeout=1.0)
+                    assert {tool.name for tool in discovered} == expected_catalog
+                    rediscovered = await asyncio.wait_for(client.list_tools(), timeout=1.0)
+                    assert {tool.name for tool in rediscovered} == expected_catalog
+                    assert execute_task.done() is False
+                finally:
+                    release.touch()
+                    execute_result = await asyncio.shield(execute_task)
+    
+                assert execute_result["ok"] is True
+                assert execute_result["result"] == "released"
+    
+>       asyncio.run(scenario())
+
+tests/test_responsiveness.py:117: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../../.local/share/uv/python/cpython-3.11.12-macos-aarch64-none/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+../../.local/share/uv/python/cpython-3.11.12-macos-aarch64-none/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../.local/share/uv/python/cpython-3.11.12-macos-aarch64-none/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_responsiveness.py:102: in scenario
+    assert await asyncio.wait_for(client.ping(), timeout=1.0) is True
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+fut = <Task cancelled name='Task-181' coro=<Client.ping() done, defined at /private/tmp/ipython-mcp-uv-cache/archive-v0/Cl2kQz-xSnCy1mtUZaGgl/lib/python3.11/site-packages/fastmcp/client/client.py:804>>
+timeout = 1.0
+
+    async def wait_for(fut, timeout):
+        """Wait for the single Future or coroutine to complete, with timeout.
+    
+        Coroutine will be wrapped in Task.
+    
+        Returns result of the Future or coroutine.  When a timeout occurs,
+        it cancels the task and raises TimeoutError.  To avoid the task
+        cancellation, wrap it in shield().
+    
+        If the wait is cancelled, the task is also cancelled.
+    
+        This function is a coroutine.
+        """
+        loop = events.get_running_loop()
+    
+        if timeout is None:
+            return await fut
+    
+        if timeout <= 0:
+            fut = ensure_future(fut, loop=loop)
+    
+            if fut.done():
+                return fut.result()
+    
+            await _cancel_and_wait(fut, loop=loop)
+            try:
+                return fut.result()
+            except exceptions.CancelledError as exc:
+                raise exceptions.TimeoutError() from exc
+    
+        waiter = loop.create_future()
+        timeout_handle = loop.call_later(timeout, _release_waiter, waiter)
+        cb = functools.partial(_release_waiter, waiter)
+    
+        fut = ensure_future(fut, loop=loop)
+        fut.add_done_callback(cb)
+    
+        try:
+            # wait until the future completes or the timeout
+            try:
+                await waiter
+            except exceptions.CancelledError:
+                if fut.done():
+                    return fut.result()
+                else:
+                    fut.remove_done_callback(cb)
+                    # We must ensure that the task is not running
+                    # after wait_for() returns.
+                    # See https://bugs.python.org/issue32751
+                    await _cancel_and_wait(fut, loop=loop)
+                    raise
+    
+            if fut.done():
+                return fut.result()
+            else:
+                fut.remove_done_callback(cb)
+                # We must ensure that the task is not running
+                # after wait_for() returns.
+                # See https://bugs.python.org/issue32751
+                await _cancel_and_wait(fut, loop=loop)
+                # In case task cancellation failed with some
+                # exception, we should re-raise it
+                # See https://bugs.python.org/issue40607
+                try:
+                    return fut.result()
+                except exceptions.CancelledError as exc:
+>                   raise exceptions.TimeoutError() from exc
+E                   TimeoutError
+
+../../.local/share/uv/python/cpython-3.11.12-macos-aarch64-none/lib/python3.11/asyncio/tasks.py:502: TimeoutError
+----------------------------- Captured stderr call -----------------------------
+<frozen runpy>:128: RuntimeWarning: 'ipython_mcp.server' found in sys.modules after import of package 'ipython_mcp', but prior to execution of 'ipython_mcp.server'; this may result in unpredictable behaviour
+
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                                                                              │
+│                         ▄▀▀ ▄▀█ █▀▀ ▀█▀ █▀▄▀█ █▀▀ █▀█                        │
+│                         █▀  █▀█ ▄▄█  █  █ ▀ █ █▄▄ █▀▀                        │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                FastMCP 3.4.7                                 │
+│                            https://gofastmcp.com                             │
+│                                                                              │
+│                  🖥  Server:      ipython-mcp, 3.4.7                          │
+│                  🚀 Deploy free: https://horizon.prefect.io                  │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                          🎉 Update available: 4.0.3                          │
+│                      Run: pip install --upgrade fastmcp                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+[09/13/26 06:42:40] INFO     Starting MCP server 'ipython-mcp'  transport.py:241
+                             with transport 'stdio'                             
+=========================== short test summary info ============================
+FAILED tests/test_responsiveness.py::test_tools_list_stays_responsive_during_active_execute[cpu-stdio]
+Traceback (most recent call last):
+  File "/Users/husam/workspace/ipython-mcp/scripts/release_matrix.py", line 78, in <module>
+    main()
+  File "/Users/husam/workspace/ipython-mcp/scripts/release_matrix.py", line 74, in main
+    run_cell(root, python, dependency_set)
+  File "/Users/husam/workspace/ipython-mcp/scripts/release_matrix.py", line 57, in run_cell
+    run(command, root)
+  File "/Users/husam/workspace/ipython-mcp/scripts/release_matrix.py", line 20, in run
+    subprocess.run(command, cwd=root, check=True)
+  File "/Users/husam/.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['uv', 'run', '--isolated', '--no-project', '--python', '3.11', '--with-editable', '/Users/husam/workspace/ipython-mcp', '--with-requirements', '/var/folders/07/p__xlp357ps_8_fb3yhffmrh0000gn/T/ipython-mcp-lock-vvyt4l7t/locked.txt', '--with', 'pytest>=8,<9', 'pytest', '-q']' returned non-zero exit status 1.

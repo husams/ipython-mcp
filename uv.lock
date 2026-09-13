@@ -561,8 +561,10 @@ name = "ipython-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "fastmcp" },
     { name = "ipython" },
+    { name = "packaging" },
     { name = "pydantic" },
 ]
 
@@ -573,8 +575,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.5,<5" },
     { name = "fastmcp", specifier = ">=3.1,<4" },
     { name = "ipython", specifier = ">=8.25,<10" },
+    { name = "packaging", specifier = ">=24,<27" },
     { name = "pydantic", specifier = ">=2.11.7,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0,<9" },
 ]

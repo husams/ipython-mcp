@@ -1,0 +1,1 @@
+{"rows":8,"valid_rows":5,"invalid_rows":3}; wrote [result.json](/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1/result.json) and [order_report.py](/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1/.ipython-mcp/snippets/order_report.py).

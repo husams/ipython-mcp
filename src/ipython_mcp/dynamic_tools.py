@@ -30,7 +30,7 @@ _MISSING = object()
 
 @dataclass(frozen=True)
 class OperationResult(Generic[T]):
-    """An owner-queue result plus whether the advertised catalog changed."""
+    """A serialized operation result plus whether the advertised catalog changed."""
 
     value: T
     catalog_changed: bool = False
@@ -76,7 +76,7 @@ class SignatureContractError(ValueError):
 
 
 class DynamicRegistry:
-    """Mutable registry used only from the ShellRuntime owner thread."""
+    """Mutable registry used only inside ShellRuntime's serialization boundary."""
 
     def __init__(self, config: ServerConfig, stable_tool_names: set[str]):
         self._config = config

@@ -71,7 +71,7 @@ def test_clean_build_artifacts_and_installed_console_stdio(tmp_path: Path):
     async def scenario():
         async with Client(StdioTransport(command=str(executable), args=[])) as client:
             tools = {tool.name for tool in await client.list_tools()}
-            assert "runtime_status" in tools
+            assert "runtime_status" not in tools
             executed = await client.call_tool(
                 "execute",
                 {

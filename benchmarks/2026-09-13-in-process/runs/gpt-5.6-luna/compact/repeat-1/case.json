@@ -1,0 +1,237 @@
+{
+  "oracle": {
+    "errors": [],
+    "helper_initial_match": true,
+    "helper_matches_initial_sha256": true,
+    "helper_reuse_match": true,
+    "helper_sha256": "feefeb9a197a64f5fde4be1c9041947318bffe92b1c83371af212b9155b97d74",
+    "helper_summarize_match": true,
+    "helper_unchanged_between_phases": true,
+    "initial_summary_match": true,
+    "ok": true,
+    "result_match": true,
+    "reuse_match": true,
+    "unchanged_sha256": true
+  },
+  "phases": {
+    "initial": {
+      "duration_seconds": 60.528673,
+      "errors": [],
+      "last_message": "{\"rows\":8,\"valid_rows\":5,\"invalid_rows\":3}; wrote [result.json](/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1/result.json) and [order_report.py](/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1/.ipython-mcp/snippets/order_report.py).",
+      "mcp_tool_calls": 2,
+      "mcp_tool_evidence": [
+        {
+          "arguments": {
+            "code": "import csv\nfrom pathlib import Path\ncsv_path = \"/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1/orders_initial.csv\"\nwith Path(csv_path).open(newline=\"\", encoding=\"utf-8\") as handle:\n    rows = list(csv.DictReader(handle))\n{\"ok\": True, \"rows_loaded\": len(rows)}"
+          },
+          "error": null,
+          "result": {
+            "execution_count": 1,
+            "ok": true,
+            "result": {
+              "ok": true,
+              "rows_loaded": 8
+            },
+            "status": "ok"
+          },
+          "status": "completed",
+          "successful": true,
+          "tool": "execute"
+        },
+        {
+          "arguments": {
+            "code": "import json\nimport sys\nfrom pathlib import Path\nsys.path.insert(0, \"/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1/.ipython-mcp/snippets\")\nfrom order_report import summarize_orders\nreport = summarize_orders(rows)\ninitial_summary = {\n    \"rows\": len(rows),\n    \"valid_rows\": report[\"valid_rows\"],\n    \"invalid_rows\": report[\"invalid_rows\"],\n}\nresult = {\"initial_summary\": initial_summary, \"report\": report}\noutput_path = \"/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1/result.json\"\nPath(output_path).write_text(json.dumps(result, separators=(\",\", \":\")), encoding=\"utf-8\")\nassert initial_summary[\"valid_rows\"] + initial_summary[\"invalid_rows\"] == initial_summary[\"rows\"]\n{\"ok\": True, \"rows\": initial_summary[\"rows\"], \"valid_rows\": report[\"valid_rows\"], \"invalid_rows\": report[\"invalid_rows\"], \"regions\": len(report[\"by_region\"])}"
+          },
+          "error": null,
+          "result": {
+            "execution_count": 2,
+            "ok": true,
+            "result": {
+              "invalid_rows": 3,
+              "ok": true,
+              "regions": 3,
+              "rows": 8,
+              "valid_rows": 5
+            },
+            "status": "ok"
+          },
+          "status": "completed",
+          "successful": true,
+          "tool": "execute"
+        }
+      ],
+      "mcp_tool_failures": 0,
+      "mcp_tool_names": [
+        "execute",
+        "execute"
+      ],
+      "mcp_tool_successes": 2,
+      "returncode": 0,
+      "state_usage": {
+        "evidence": [
+          {
+            "arguments": {
+              "code": "import csv\nfrom pathlib import Path\ncsv_path = \"/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1/orders_initial.csv\"\nwith Path(csv_path).open(newline=\"\", encoding=\"utf-8\") as handle:\n    rows = list(csv.DictReader(handle))\n{\"ok\": True, \"rows_loaded\": len(rows)}"
+            },
+            "error": null,
+            "result": {
+              "execution_count": 1,
+              "ok": true,
+              "result": {
+                "ok": true,
+                "rows_loaded": 8
+              },
+              "status": "ok"
+            },
+            "status": "completed",
+            "successful": true,
+            "tool": "execute"
+          },
+          {
+            "arguments": {
+              "code": "import json\nimport sys\nfrom pathlib import Path\nsys.path.insert(0, \"/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1/.ipython-mcp/snippets\")\nfrom order_report import summarize_orders\nreport = summarize_orders(rows)\ninitial_summary = {\n    \"rows\": len(rows),\n    \"valid_rows\": report[\"valid_rows\"],\n    \"invalid_rows\": report[\"invalid_rows\"],\n}\nresult = {\"initial_summary\": initial_summary, \"report\": report}\noutput_path = \"/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1/result.json\"\nPath(output_path).write_text(json.dumps(result, separators=(\",\", \":\")), encoding=\"utf-8\")\nassert initial_summary[\"valid_rows\"] + initial_summary[\"invalid_rows\"] == initial_summary[\"rows\"]\n{\"ok\": True, \"rows\": initial_summary[\"rows\"], \"valid_rows\": report[\"valid_rows\"], \"invalid_rows\": report[\"invalid_rows\"], \"regions\": len(report[\"by_region\"])}"
+            },
+            "error": null,
+            "result": {
+              "execution_count": 2,
+              "ok": true,
+              "result": {
+                "invalid_rows": 3,
+                "ok": true,
+                "regions": 3,
+                "rows": 8,
+                "valid_rows": 5
+              },
+              "status": "ok"
+            },
+            "status": "completed",
+            "successful": true,
+            "tool": "execute"
+          }
+        ],
+        "failed_tool_calls": 0,
+        "mcp_tool_call_count": 2,
+        "successful_tool_calls": 2,
+        "tool_names": [
+          "execute",
+          "execute"
+        ]
+      },
+      "status": "success",
+      "timed_out": false,
+      "turn_completed": true,
+      "usage": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 76544,
+        "input_tokens": 98617,
+        "output_tokens": 2653,
+        "reasoning_output_tokens": 1363,
+        "total_tokens": 101270,
+        "uncached_input_tokens": 22073
+      },
+      "usage_status": "available"
+    },
+    "reuse": {
+      "duration_seconds": 33.497801,
+      "errors": [],
+      "last_message": "Created [reuse.json](/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1/reuse.json) via one IPython MCP `execute`; fresh namespace, helper imported, and verified unchanged.",
+      "mcp_tool_calls": 1,
+      "mcp_tool_evidence": [
+        {
+          "arguments": {
+            "code": "import hashlib\nimport importlib\nimport json\nimport sys\nfrom pathlib import Path\n\nproject = Path(\"/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1\")\nhelper_path = project / \".ipython-mcp/snippets/order_report.py\"\ncsv_path = project / \"orders_reuse.csv\"\noutput_path = project / \"reuse.json\"\n\nhelper_hash_before = hashlib.sha256(helper_path.read_bytes()).hexdigest()\nsys.path.insert(0, str(helper_path.parent))\nif \"order_report\" in sys.modules:\n    report_orders = sys.modules[\"order_report\"].report_orders\n    module_reused = True\nelse:\n    from order_report import report_orders\n    module_reused = False\n\nresult = report_orders(str(csv_path))\noutput_path.write_text(json.dumps(result), encoding=\"utf-8\")\nassert json.loads(output_path.read_text(encoding=\"utf-8\")) == result\nassert hashlib.sha256(helper_path.read_bytes()).hexdigest() == helper_hash_before\n\n{\"ok\": True, \"report_type\": type(result).__name__, \"report_keys\": list(result) if isinstance(result, dict) else None, \"module_reused\": module_reused, \"helper_unchanged\": True, \"output_bytes\": output_path.stat().st_size}"
+          },
+          "error": null,
+          "result": {
+            "execution_count": 1,
+            "ok": true,
+            "result": {
+              "helper_unchanged": true,
+              "module_reused": false,
+              "ok": true,
+              "output_bytes": 113,
+              "report_keys": [
+                "valid_rows",
+                "invalid_rows",
+                "total_cents",
+                "by_region"
+              ],
+              "report_type": "dict"
+            },
+            "status": "ok"
+          },
+          "status": "completed",
+          "successful": true,
+          "tool": "execute"
+        }
+      ],
+      "mcp_tool_failures": 0,
+      "mcp_tool_names": [
+        "execute"
+      ],
+      "mcp_tool_successes": 1,
+      "returncode": 0,
+      "state_usage": {
+        "evidence": [
+          {
+            "arguments": {
+              "code": "import hashlib\nimport importlib\nimport json\nimport sys\nfrom pathlib import Path\n\nproject = Path(\"/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1\")\nhelper_path = project / \".ipython-mcp/snippets/order_report.py\"\ncsv_path = project / \"orders_reuse.csv\"\noutput_path = project / \"reuse.json\"\n\nhelper_hash_before = hashlib.sha256(helper_path.read_bytes()).hexdigest()\nsys.path.insert(0, str(helper_path.parent))\nif \"order_report\" in sys.modules:\n    report_orders = sys.modules[\"order_report\"].report_orders\n    module_reused = True\nelse:\n    from order_report import report_orders\n    module_reused = False\n\nresult = report_orders(str(csv_path))\noutput_path.write_text(json.dumps(result), encoding=\"utf-8\")\nassert json.loads(output_path.read_text(encoding=\"utf-8\")) == result\nassert hashlib.sha256(helper_path.read_bytes()).hexdigest() == helper_hash_before\n\n{\"ok\": True, \"report_type\": type(result).__name__, \"report_keys\": list(result) if isinstance(result, dict) else None, \"module_reused\": module_reused, \"helper_unchanged\": True, \"output_bytes\": output_path.stat().st_size}"
+            },
+            "error": null,
+            "result": {
+              "execution_count": 1,
+              "ok": true,
+              "result": {
+                "helper_unchanged": true,
+                "module_reused": false,
+                "ok": true,
+                "output_bytes": 113,
+                "report_keys": [
+                  "valid_rows",
+                  "invalid_rows",
+                  "total_cents",
+                  "by_region"
+                ],
+                "report_type": "dict"
+              },
+              "status": "ok"
+            },
+            "status": "completed",
+            "successful": true,
+            "tool": "execute"
+          }
+        ],
+        "failed_tool_calls": 0,
+        "mcp_tool_call_count": 1,
+        "successful_tool_calls": 1,
+        "tool_names": [
+          "execute"
+        ]
+      },
+      "status": "success",
+      "timed_out": false,
+      "turn_completed": true,
+      "usage": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 47104,
+        "input_tokens": 54589,
+        "output_tokens": 1354,
+        "reasoning_output_tokens": 770,
+        "total_tokens": 55943,
+        "uncached_input_tokens": 7485
+      },
+      "usage_status": "available"
+    }
+  },
+  "status": "success",
+  "task_correctness": true,
+  "usage_total": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 123648,
+    "input_tokens": 153206,
+    "output_tokens": 4007,
+    "reasoning_output_tokens": 2133,
+    "total_tokens": 157213,
+    "uncached_input_tokens": 29558
+  }
+}

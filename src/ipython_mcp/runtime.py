@@ -1,11 +1,10 @@
-"""A thread-affine, serialized IPython runtime."""
+"""A directly owned, serialized in-process IPython runtime."""
 
 from __future__ import annotations
 
 import asyncio
 import atexit
 import contextlib
-import ctypes
 import importlib
 import inspect
 import io
@@ -16,18 +15,20 @@ import heapq
 import sys
 import threading
 import traceback
+from concurrent.futures import Future, ThreadPoolExecutor
 from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, fields, is_dataclass
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 from IPython.core.interactiveshell import InteractiveShell
 from IPython.core.displayhook import DisplayHook
+from anyio import CancelScope
 
 from .config import ServerConfig
 from .dynamic_tools import DynamicRegistry, DynamicToolSnapshot, OperationResult
+from .environment import StartupEnvironment, StartupPhaseError
 from .models import (
     CallFunctionResponse,
     ErrorInfo,
@@ -70,7 +71,6 @@ STABLE_TOOL_NAMES = {
     "reset",
     "register_tool",
     "unregister_tool",
-    "runtime_status",
 }
 
 
@@ -125,20 +125,51 @@ class BoundedTextSink(io.TextIOBase):
         return "".join(self._parts)
 
 
+class _DiscardingTextSink(io.TextIOBase):
+    """A writable stream that prevents owner-side output corrupting stdio."""
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, value: str) -> int:
+        return len(value) if isinstance(value, str) else len(str(value))
+
+
+@contextlib.contextmanager
+def _eof_user_stdin():
+    """Prevent user code from consuming the MCP transport's stdin stream."""
+
+    previous = sys.stdin
+    sys.stdin = io.StringIO("")
+    try:
+        yield
+    finally:
+        sys.stdin = previous
+
+
 class ShellRuntime:
-    """Own the only IPython shell and execute all operations on one thread."""
+    """Own the only IPython shell and serialize direct in-process operations."""
 
     def __init__(self, config: ServerConfig):
         self.config = config
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ipython-shell")
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="ipython-mcp-shell"
+        )
         self._shell: InteractiveShell | None = None
         self._module_bindings: dict[str, str] = {}
         self._runtime_bindings: dict[str, Any] = {}
-        self._added_library_paths: list[str] = []
+        self._startup_environment = StartupEnvironment(config)
         self._execution_count = 0
         self._closed = False
-        self._owner_thread_id: int | None = None
+        self._closing = False
+        self._close_future: Future[Any] | None = None
+        self._lifecycle_lock = threading.Lock()
         self._dynamic_registry = DynamicRegistry(config, STABLE_TOOL_NAMES)
+        # Owner-produced immutable-by-copy snapshots keep discovery off the
+        # shell queue while user Python is executing.
+        self._dynamic_tool_cache: dict[str, DynamicToolSnapshot] = {}
+        self._catalog_revision = 0
+        self._dynamic_tool_count = 0
 
     @property
     def closed(self) -> bool:
@@ -147,56 +178,41 @@ class ShellRuntime:
         return self._closed
 
     async def start(self) -> None:
+        if self._closed or self._closing:
+            raise RuntimeError("IPython runtime is closed")
+        future = self._executor.submit(self._run_in_owner, self._start_in_process)
         try:
-            await self._submit(self._start_in_owner)
-        except Exception:
+            await asyncio.shield(asyncio.wrap_future(future))
+        except asyncio.CancelledError:
+            # The owner cannot be interrupted. Queue teardown as a completion
+            # callback so repeated cancellation cannot strand the executor.
+            self._closing = True
+            future.add_done_callback(self._finish_cancelled_start)
+            raise
+        except BaseException:
             self._closed = True
-            self._executor.shutdown(wait=True, cancel_futures=True)
+            self._shutdown_executor()
             raise
 
     async def close(self) -> None:
         if self._closed:
             return
-        try:
-            await self._submit(self._close_in_owner)
-        finally:
-            self._closed = True
-            self._executor.shutdown(wait=True, cancel_futures=True)
-
-    def request_interrupt(self) -> bool:
-        """Inject ``KeyboardInterrupt`` into the thread-affine Python owner."""
-
-        thread_id = self._owner_thread_id
-        if thread_id is None or self._closed:
-            return False
-        changed = ctypes.pythonapi.PyThreadState_SetAsyncExc(
-            ctypes.c_ulong(thread_id), ctypes.py_object(KeyboardInterrupt)
-        )
-        if changed == 1:
-            return True
-        if changed > 1:
-            ctypes.pythonapi.PyThreadState_SetAsyncExc(
-                ctypes.c_ulong(thread_id), ctypes.c_void_p(0)
-            )
-        return False
-
-    async def health(self) -> dict[str, Any]:
-        """Probe the owner and reconcile the catalog after an interruption."""
-
-        outcome = await self.dynamic_tools(include_stale=True)
-        return {
-            "dynamic_tools": [asdict(snapshot) for snapshot in outcome.value],
-            "catalog_changed": outcome.catalog_changed,
-            "catalog_revision": self._dynamic_registry.revision,
-        }
+        if self._close_future is not None:
+            wrapped = asyncio.wrap_future(self._close_future)
+            await self._await_close(wrapped)
+            return
+        self._queue_close()
+        assert self._close_future is not None
+        wrapped = asyncio.wrap_future(self._close_future)
+        await self._await_close(wrapped)
 
     @property
     def catalog_revision(self) -> int:
-        return self._dynamic_registry.revision
+        return self._catalog_revision
 
     @property
     def dynamic_tool_count(self) -> int:
-        return self._dynamic_registry.active_count
+        return self._dynamic_tool_count
 
     async def execute(self, code: str) -> ExecuteResponse:
         if not isinstance(code, str) or not code.strip():
@@ -220,87 +236,246 @@ class ShellRuntime:
                         ),
                     ),
                     self._dynamic_registry.reconcile(self.shell.user_ns),
-                )
+                ),
+                operation_result=True,
             )
-        return await self._submit(lambda: self._execute_operation_in_owner(code))
+        return await self._submit(
+            lambda: self._execute_operation_in_owner(code), operation_result=True
+        )
 
     async def list_functions(self) -> ListResponse:
         return await self._submit(self._list_functions_in_owner)
 
+    async def list_functions_operation(self) -> OperationResult[ListResponse]:
+        return await self._plain_operation(self._list_functions_in_owner)
+
     async def call_function(self, name: str, arguments: dict[str, Any] | str) -> CallFunctionResponse:
         return await self._submit(lambda: self._call_function_in_owner(name, arguments))
+
+    async def call_function_operation(
+        self, name: str, arguments: dict[str, Any] | str
+    ) -> OperationResult[CallFunctionResponse]:
+        return await self._plain_operation(
+            lambda: self._call_function_in_owner(name, arguments)
+        )
 
     async def search(self, query: str, exact: bool, limit: int) -> SearchResponse:
         return await self._submit(lambda: self._search_in_owner(query, exact, limit))
 
+    async def search_operation(
+        self, query: str, exact: bool, limit: int
+    ) -> OperationResult[SearchResponse]:
+        return await self._plain_operation(
+            lambda: self._search_in_owner(query, exact, limit)
+        )
+
     async def reload(self, modules: list[str]) -> ReloadResponse:
         return await self._submit(lambda: self._reload_in_owner(modules))
 
+    async def reload_operation(
+        self, modules: list[str]
+    ) -> OperationResult[ReloadResponse]:
+        return await self._plain_operation(lambda: self._reload_in_owner(modules))
+
     async def inspect(self, name: str) -> InspectResponse:
         return await self._submit(lambda: self._inspect_in_owner(name))
+
+    async def inspect_operation(self, name: str) -> OperationResult[InspectResponse]:
+        return await self._plain_operation(lambda: self._inspect_in_owner(name))
 
     async def remove(self, names: list[str]) -> RemoveResponse:
         return (await self.remove_operation(names)).value
 
     async def remove_operation(self, names: list[str]) -> OperationResult[RemoveResponse]:
-        return await self._submit(lambda: self._remove_operation_in_owner(names))
+        return await self._submit(
+            lambda: self._remove_operation_in_owner(names), operation_result=True
+        )
 
     async def reset(self) -> ResetResponse:
         return (await self.reset_operation()).value
 
     async def reset_operation(self) -> OperationResult[ResetResponse]:
-        return await self._submit(self._reset_operation_in_owner)
+        return await self._submit(self._reset_operation_in_owner, operation_result=True)
 
     async def register_tool(
         self, name: str, tool_name: str | None, description: str | None
     ) -> OperationResult[RegisterToolResponse]:
         return await self._submit(
-            lambda: self._register_tool_in_owner(name, tool_name, description)
+            lambda: self._register_tool_in_owner(name, tool_name, description),
+            operation_result=True,
         )
 
     async def unregister_tool(
         self, names: list[str]
     ) -> OperationResult[UnregisterToolResponse]:
         return await self._submit(
-            lambda: self._dynamic_registry.unregister(self.shell.user_ns, names)
+            lambda: self._dynamic_registry.unregister(self.shell.user_ns, names),
+            operation_result=True,
         )
 
     async def dynamic_tools(
         self, *, include_stale: bool = False
     ) -> OperationResult[list[DynamicToolSnapshot]]:
-        return await self._submit(
-            lambda: self._dynamic_registry.snapshots(
-                self.shell.user_ns, include_stale=include_stale
-            )
+        return OperationResult(
+            [
+                self._copy_snapshot(snapshot)
+                for snapshot in sorted(
+                    self._dynamic_tool_cache.values(), key=lambda item: item.name
+                )
+                if include_stale or snapshot.active
+            ]
         )
 
     async def dynamic_tool(
         self, name: str
     ) -> OperationResult[DynamicToolSnapshot | None]:
-        return await self._submit(
-            lambda: self._dynamic_registry.snapshot(self.shell.user_ns, name)
+        snapshot = self._dynamic_tool_cache.get(name)
+        return OperationResult(
+            None if snapshot is None else self._copy_snapshot(snapshot)
         )
 
     async def call_dynamic(
         self, name: str, arguments: dict[str, Any]
     ) -> OperationResult[CallFunctionResponse]:
         return await self._submit(
-            lambda: self._call_dynamic_in_owner(name, arguments)
+            lambda: self._call_dynamic_in_owner(name, arguments),
+            operation_result=True,
         )
 
-    async def _submit(self, operation: Callable[[], Any]) -> Any:
-        if self._closed:
+    async def _submit(
+        self, operation: Callable[[], Any], *, operation_result: bool = False
+    ) -> Any:
+        if self._closed or self._closing:
             raise RuntimeError("IPython runtime is closed")
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, operation)
+        future = self._executor.submit(self._run_in_owner, operation)
+        result = await asyncio.wrap_future(future)
+        return result if operation_result else result.value
 
-    def _start_in_owner(self) -> None:
-        self._owner_thread_id = threading.get_ident()
-        # IPython's public display() helper only publishes rich output when an
-        # active singleton exists.  The worker process owns exactly one shell,
-        # so registering it as that singleton makes the public API and the
-        # shell's bounded display publisher share the same lifecycle.
-        self._shell = InteractiveShell.instance()
+    async def _plain_operation(
+        self, operation: Callable[[], Any]
+    ) -> OperationResult[Any]:
+        return await self._submit(operation, operation_result=True)
+
+    @staticmethod
+    async def _await_close(wrapped: asyncio.Future[Any]) -> Any:
+        """Keep lifespan teardown alive through AnyIO cancellation scopes."""
+
+        with CancelScope(shield=True):
+            return await asyncio.shield(wrapped)
+
+    def _run_in_owner(self, operation: Callable[[], Any]) -> OperationResult[Any]:
+        """Run one operation and reconcile the catalog before releasing ownership."""
+
+        raw: Any = None
+        operation_error: BaseException | None = None
+        with _eof_user_stdin(), contextlib.redirect_stdout(
+            _DiscardingTextSink()
+        ), contextlib.redirect_stderr(_DiscardingTextSink()):
+            try:
+                raw = operation()
+            except BaseException as exc:
+                operation_error = exc
+            changed = self._refresh_dynamic_cache_in_owner()
+        if operation_error is not None:
+            raise operation_error
+        if isinstance(raw, OperationResult):
+            return OperationResult(raw.value, raw.catalog_changed or changed)
+        return OperationResult(raw, changed)
+
+    def _refresh_dynamic_cache_in_owner(self) -> bool:
+        if self._shell is None:
+            return False
+        changed = self._dynamic_registry.reconcile(self.shell.user_ns)
+        snapshots = self._dynamic_registry.snapshots(
+            self.shell.user_ns, include_stale=True
+        )
+        changed = changed or snapshots.catalog_changed
+        self._dynamic_tool_cache = {
+            snapshot.name: self._copy_snapshot(snapshot)
+            for snapshot in snapshots.value
+        }
+        self._catalog_revision = self._dynamic_registry.revision
+        self._dynamic_tool_count = self._dynamic_registry.active_count
+        return changed
+
+    @staticmethod
+    def _copy_snapshot(snapshot: DynamicToolSnapshot) -> DynamicToolSnapshot:
+        return DynamicToolSnapshot(
+            name=snapshot.name,
+            description=snapshot.description,
+            input_schema=json.loads(json.dumps(snapshot.input_schema)),
+            active=snapshot.active,
+        )
+
+    def _finish_close(self, _: Any) -> None:
+        self._closed = True
+        self._shutdown_executor()
+
+    def _finish_cancelled_start(self, future: Any) -> None:
+        if future.cancelled():
+            self._closed = True
+            self._shutdown_executor()
+            return
+        with contextlib.suppress(BaseException):
+            if future.exception() is not None:
+                self._closed = True
+                self._shutdown_executor()
+                return
+        if self._shell is None:
+            self._closed = True
+            self._shutdown_executor()
+            return
+        self._queue_close()
+
+    def _queue_close(self) -> None:
+        with self._lifecycle_lock:
+            if self._close_future is not None:
+                return
+            self._closing = True
+            future = self._executor.submit(self._run_in_owner, self._close_in_process)
+            self._close_future = future
+            future.add_done_callback(self._finish_close)
+
+    def _shutdown_executor(self) -> None:
+        # Owner work is complete before this callback runs. A nonblocking
+        # shutdown keeps cancellation and MCP teardown off the event loop.
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _start_in_process(self) -> None:
+        if self._shell is not None:
+            return
+        imported: dict[str, ModuleType] = {}
+        current_module: str | None = None
+        try:
+            # Provisioning, environment variables, selected site-packages, and
+            # library paths all land before preloads and shell construction.
+            self._startup_environment.prepare()
+            for module_name in self.config.preload_modules:
+                current_module = module_name
+                imported[module_name] = importlib.import_module(module_name)
+        except Exception as exc:
+            self._startup_environment.restore()
+            if isinstance(exc, (RuntimeStartupError, StartupPhaseError)):
+                raise RuntimeStartupError(str(exc)) from exc
+            module_name = current_module or "unknown"
+            raise RuntimeStartupError(
+                f"task environment startup failed during preload: "
+                f"{type(exc).__name__} while importing {module_name}"
+            ) from exc
+
+        # IPython's public display() helper publishes rich output only when an
+        # active singleton exists. The server process owns exactly one shell.
+        startup_path = (
+            list(sys.path)
+            if self._startup_environment.site_packages is not None
+            else None
+        )
+        try:
+            self._shell = InteractiveShell.instance()
+        finally:
+            if startup_path is not None:
+                sys.path[:] = startup_path
+        self._restore_selected_environment_precedence()
         # This server is a transient MCP process, not an IPython profile. Do
         # not write source, results, or history metadata to the user's global
         # history database.
@@ -311,30 +486,25 @@ class ShellRuntime:
             for name in _IPYTHON_INTERNAL_NAMES
             if name in self._shell.user_ns
         }
-        current_module: str | None = None
         try:
-            for path in reversed(self.config.library_paths):
-                path = Path(path).expanduser().resolve()
-                if not path.is_dir():
-                    raise RuntimeStartupError(f"configured library path does not exist: {path}")
-                if str(path) not in sys.path:
-                    sys.path.insert(0, str(path))
-                    self._added_library_paths.append(str(path))
-            for module_name in self.config.preload_modules:
-                current_module = module_name
-                self._import_and_bind(module_name)
+            for module_name, module in imported.items():
+                self._bind_module(module_name, module)
         except Exception as exc:
             self._shell = None
             with contextlib.suppress(Exception):
                 InteractiveShell.clear_instance()
             self._runtime_bindings.clear()
-            self._remove_added_library_paths()
-            if isinstance(exc, RuntimeStartupError):
-                raise
-            module_name = current_module or "unknown"
-            raise RuntimeStartupError(f"failed to preload module {module_name}: {type(exc).__name__}: {exc}") from exc
+            self._startup_environment.restore()
+            raise RuntimeStartupError(
+                f"task environment startup failed during binding: {type(exc).__name__}"
+            ) from exc
 
-    def _close_in_owner(self) -> None:
+    def _restore_selected_environment_precedence(self) -> None:
+        """Keep the selected environment ahead of IPython's virtualenv path."""
+
+        self._startup_environment.prioritize_site_packages()
+
+    def _close_in_process(self) -> None:
         if self._shell is not None:
             shell = self._shell
             with contextlib.suppress(Exception):
@@ -348,8 +518,9 @@ class ShellRuntime:
         self._runtime_bindings.clear()
         self._module_bindings.clear()
         self._dynamic_registry.close()
-        self._remove_added_library_paths()
-        self._owner_thread_id = None
+        self._dynamic_tool_cache = {}
+        self._dynamic_tool_count = 0
+        self._startup_environment.restore()
 
     @staticmethod
     def _stop_history_writer(shell: InteractiveShell) -> None:
@@ -361,20 +532,13 @@ class ShellRuntime:
         with contextlib.suppress(Exception):
             writer.join(timeout=1.0)
 
-    def _remove_added_library_paths(self) -> None:
-        for path in self._added_library_paths:
-            with contextlib.suppress(ValueError):
-                sys.path.remove(path)
-        self._added_library_paths.clear()
-
     @property
     def shell(self) -> InteractiveShell:
         if self._shell is None:
             raise RuntimeError("IPython runtime is not started")
         return self._shell
 
-    def _import_and_bind(self, module_name: str) -> str:
-        module = importlib.import_module(module_name)
+    def _bind_module(self, module_name: str, module: ModuleType) -> str:
         binding = self.config.module_aliases.get(module_name, module_name.rsplit(".", 1)[-1])
         self.shell.user_ns[binding] = module
         self._module_bindings[module_name] = binding
@@ -427,7 +591,10 @@ class ShellRuntime:
 
                 self.shell.display_pub.publish = publish
                 try:
-                    run_result = self.shell.run_cell(code, store_history=False, silent=False)
+                    with _eof_user_stdin():
+                        run_result = self.shell.run_cell(
+                            code, store_history=False, silent=False
+                        )
                 finally:
                     self.shell.showtraceback = showtraceback
                     self.shell.showsyntaxerror = showsyntaxerror
@@ -483,7 +650,7 @@ class ShellRuntime:
             try:
                 result, result_truncated = self._json_safe(result)
                 truncation.result = result_truncated
-            except JsonTranslationError as exc:
+            except JsonTranslationError:
                 live_result = getattr(run_result, "result", None)
                 result = {
                     "json_compatible": False,
@@ -586,8 +753,9 @@ class ShellRuntime:
         except (TypeError, ValueError) as exc:
             return CallFunctionResponse(ok=False, name=name, error=ErrorInfo(code="argument_binding_error", message=str(exc), error_type=type(exc).__name__))
         try:
-            value = target(**parsed)
-        except Exception as exc:
+            with _eof_user_stdin():
+                value = target(**parsed)
+        except BaseException as exc:
             logger.info("tool=call_function ok=false")
             return CallFunctionResponse(ok=False, name=name, error=self._error_info("callable_error", exc))
         try:
@@ -880,7 +1048,7 @@ class ShellRuntime:
         assert entry is not None
         target = self.shell.user_ns.get(entry.backing_name)
         if target is not entry.callable_object:
-            # A defensive owner-thread recheck makes the preparation/invocation
+            # A defensive in-process recheck makes the preparation/invocation
             # boundary explicit even though no other shell operation can run here.
             changed = self._dynamic_registry.reconcile(self.shell.user_ns) or changed
             entry, coerced, error, _ = self._dynamic_registry.prepare_call(
@@ -891,8 +1059,9 @@ class ShellRuntime:
             assert entry is not None
             target = entry.callable_object
         try:
-            value = target(**coerced)
-        except Exception as exc:
+            with _eof_user_stdin():
+                value = target(**coerced)
+        except BaseException as exc:
             response = CallFunctionResponse(
                 ok=False,
                 name=name,
