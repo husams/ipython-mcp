@@ -1,0 +1,6 @@
+region,units,unit_price_cents
+north,2,100
+west,1,500
+south,3,200
+bad-units,-1,100
+bad-price,2,bad

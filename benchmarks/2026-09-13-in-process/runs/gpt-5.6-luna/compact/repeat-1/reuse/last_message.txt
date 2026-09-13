@@ -1,0 +1,1 @@
+Created [reuse.json](/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-5.6-luna/compact/repeat-1/reuse.json) via one IPython MCP `execute`; fresh namespace, helper imported, and verified unchanged.

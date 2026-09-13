@@ -1,0 +1,155 @@
+{
+  "duration_seconds": 37.355688,
+  "errors": [],
+  "last_message": "Created and verified `reuse.json` using 2 MCP execute calls; reused persistent state, imported the helper once, and verified its bytes unchanged.",
+  "mcp_tool_calls": 2,
+  "mcp_tool_evidence": [
+    {
+      "arguments": {
+        "code": "import sys, inspect, hashlib\nfrom pathlib import Path\n_task_root = Path('/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-6-astra/compact/repeat-1')\n_task_helper = _task_root / '.ipython-mcp/snippets/order_report.py'\n_task_hash_before = hashlib.sha256(_task_helper.read_bytes()).hexdigest()\n{'names': sorted(n for n in globals() if not n.startswith('_'))[:30], 'modules': [(n, getattr(m, '__file__', None)) for n, m in list(sys.modules.items()) if 'order_report' in n][:10], 'helper_source': _task_helper.read_text()}"
+      },
+      "error": null,
+      "result": {
+        "execution_count": 1,
+        "ok": true,
+        "result": {
+          "helper_source": "import csv\nimport re\nfrom collections.abc import Mapping\n\n\ndef _positive_integer(value):\n    if isinstance(value, bool):\n        return None\n    if isinstance(value, int):\n        return value if value > 0 else None\n    if isinstance(value, str) and re.fullmatch(r\"[+-]?[0-9]+\", value.strip()):\n        try:\n            number = int(value.strip())\n        except ValueError:\n            return None\n        return number if number > 0 else None\n    return None\n\n\ndef summarize_orders(rows):\n    \"\"\"Count valid orders and aggregate their value in cents by region.\"\"\"\n    valid_rows = invalid_rows = total_cents = 0\n    by_region = {}\n    for row in rows:\n        if not isinstance(row, Mapping):\n            invalid_rows += 1\n            continue\n        region = row.get(\"region\")\n        region = region.strip() if isinstance(region, str) else \"\"\n        units = _positive_integer(row.get(\"units\"))\n        price = _positive_integer(row.get(\"unit_price_cents\"))\n        if not region or units is None or price is None:\n            invalid_rows += 1\n            continue\n        amount = units * price\n        valid_rows += 1\n        total_cents += amount\n        by_region[region] = by_region.get(region, 0) + amount\n    return {\"valid_rows\": valid_rows, \"invalid_rows\": invalid_rows,\n            \"total_cents\": total_cents, \"by_region\": by_region}\n\n\ndef report_orders(path):\n    \"\"\"Parse an orders CSV and summarize its rows.\"\"\"\n    with open(path, newline=\"\") as source:\n        return summarize_orders(csv.DictReader(source))\n",
+          "modules": [],
+          "names": [
+            "In",
+            "Out",
+            "Path",
+            "exit",
+            "get_ipython",
+            "hashlib",
+            "inspect",
+            "open",
+            "quit",
+            "sys"
+          ]
+        },
+        "runtime": {
+          "epoch": 1,
+          "queue_wait_seconds": 0.000231
+        },
+        "status": "ok"
+      },
+      "status": "completed",
+      "successful": true,
+      "tool": "execute"
+    },
+    {
+      "arguments": {
+        "code": "import importlib, json\n_task_module_reused = 'order_report' in sys.modules\nif str(_task_helper.parent) not in sys.path:\n    sys.path.insert(0, str(_task_helper.parent))\norder_report = importlib.import_module('order_report')\nassert Path(order_report.__file__).resolve() == _task_helper.resolve()\nreuse_report = order_report.report_orders(str(_task_root / 'orders_reuse.csv'))\n_task_output = _task_root / 'reuse.json'\n_task_output.write_text(json.dumps(reuse_report))\nassert json.loads(_task_output.read_text()) == reuse_report\nassert hashlib.sha256(_task_helper.read_bytes()).hexdigest() == _task_hash_before\n{'written': str(_task_output), 'verified': True, 'helper_unchanged': True, 'module_reused': _task_module_reused}"
+      },
+      "error": null,
+      "result": {
+        "execution_count": 2,
+        "ok": true,
+        "result": {
+          "helper_unchanged": true,
+          "module_reused": false,
+          "verified": true,
+          "written": "/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-6-astra/compact/repeat-1/reuse.json"
+        },
+        "runtime": {
+          "epoch": 1,
+          "queue_wait_seconds": 9.6e-05
+        },
+        "status": "ok"
+      },
+      "status": "completed",
+      "successful": true,
+      "tool": "execute"
+    }
+  ],
+  "mcp_tool_failures": 0,
+  "mcp_tool_names": [
+    "execute",
+    "execute"
+  ],
+  "mcp_tool_successes": 2,
+  "returncode": 0,
+  "state_usage": {
+    "evidence": [
+      {
+        "arguments": {
+          "code": "import sys, inspect, hashlib\nfrom pathlib import Path\n_task_root = Path('/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-6-astra/compact/repeat-1')\n_task_helper = _task_root / '.ipython-mcp/snippets/order_report.py'\n_task_hash_before = hashlib.sha256(_task_helper.read_bytes()).hexdigest()\n{'names': sorted(n for n in globals() if not n.startswith('_'))[:30], 'modules': [(n, getattr(m, '__file__', None)) for n, m in list(sys.modules.items()) if 'order_report' in n][:10], 'helper_source': _task_helper.read_text()}"
+        },
+        "error": null,
+        "result": {
+          "execution_count": 1,
+          "ok": true,
+          "result": {
+            "helper_source": "import csv\nimport re\nfrom collections.abc import Mapping\n\n\ndef _positive_integer(value):\n    if isinstance(value, bool):\n        return None\n    if isinstance(value, int):\n        return value if value > 0 else None\n    if isinstance(value, str) and re.fullmatch(r\"[+-]?[0-9]+\", value.strip()):\n        try:\n            number = int(value.strip())\n        except ValueError:\n            return None\n        return number if number > 0 else None\n    return None\n\n\ndef summarize_orders(rows):\n    \"\"\"Count valid orders and aggregate their value in cents by region.\"\"\"\n    valid_rows = invalid_rows = total_cents = 0\n    by_region = {}\n    for row in rows:\n        if not isinstance(row, Mapping):\n            invalid_rows += 1\n            continue\n        region = row.get(\"region\")\n        region = region.strip() if isinstance(region, str) else \"\"\n        units = _positive_integer(row.get(\"units\"))\n        price = _positive_integer(row.get(\"unit_price_cents\"))\n        if not region or units is None or price is None:\n            invalid_rows += 1\n            continue\n        amount = units * price\n        valid_rows += 1\n        total_cents += amount\n        by_region[region] = by_region.get(region, 0) + amount\n    return {\"valid_rows\": valid_rows, \"invalid_rows\": invalid_rows,\n            \"total_cents\": total_cents, \"by_region\": by_region}\n\n\ndef report_orders(path):\n    \"\"\"Parse an orders CSV and summarize its rows.\"\"\"\n    with open(path, newline=\"\") as source:\n        return summarize_orders(csv.DictReader(source))\n",
+            "modules": [],
+            "names": [
+              "In",
+              "Out",
+              "Path",
+              "exit",
+              "get_ipython",
+              "hashlib",
+              "inspect",
+              "open",
+              "quit",
+              "sys"
+            ]
+          },
+          "runtime": {
+            "epoch": 1,
+            "queue_wait_seconds": 0.000231
+          },
+          "status": "ok"
+        },
+        "status": "completed",
+        "successful": true,
+        "tool": "execute"
+      },
+      {
+        "arguments": {
+          "code": "import importlib, json\n_task_module_reused = 'order_report' in sys.modules\nif str(_task_helper.parent) not in sys.path:\n    sys.path.insert(0, str(_task_helper.parent))\norder_report = importlib.import_module('order_report')\nassert Path(order_report.__file__).resolve() == _task_helper.resolve()\nreuse_report = order_report.report_orders(str(_task_root / 'orders_reuse.csv'))\n_task_output = _task_root / 'reuse.json'\n_task_output.write_text(json.dumps(reuse_report))\nassert json.loads(_task_output.read_text()) == reuse_report\nassert hashlib.sha256(_task_helper.read_bytes()).hexdigest() == _task_hash_before\n{'written': str(_task_output), 'verified': True, 'helper_unchanged': True, 'module_reused': _task_module_reused}"
+        },
+        "error": null,
+        "result": {
+          "execution_count": 2,
+          "ok": true,
+          "result": {
+            "helper_unchanged": true,
+            "module_reused": false,
+            "verified": true,
+            "written": "/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-6-astra/compact/repeat-1/reuse.json"
+          },
+          "runtime": {
+            "epoch": 1,
+            "queue_wait_seconds": 9.6e-05
+          },
+          "status": "ok"
+        },
+        "status": "completed",
+        "successful": true,
+        "tool": "execute"
+      }
+    ],
+    "failed_tool_calls": 0,
+    "mcp_tool_call_count": 2,
+    "successful_tool_calls": 2,
+    "tool_names": [
+      "execute",
+      "execute"
+    ]
+  },
+  "status": "success",
+  "timed_out": false,
+  "turn_completed": true,
+  "usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 52096,
+    "input_tokens": 71597,
+    "output_tokens": 612,
+    "reasoning_output_tokens": 65,
+    "total_tokens": 72209,
+    "uncached_input_tokens": 19501
+  },
+  "usage_status": "available"
+}

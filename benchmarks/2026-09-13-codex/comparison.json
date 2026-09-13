@@ -1,0 +1,74 @@
+{
+  "cli_version": "codex-cli 0.153.4",
+  "method": "One two-phase case per model per revision. Same CSV task, full without skill versus compact plus skill. V2 also tunes server instructions. Totals are input + output; cached input and reasoning output are subsets, not added again. These sequential developmental measurements are not independent confirmatory runs.",
+  "records": [
+    {
+      "model": "gpt-5.6-luna",
+      "status": "success",
+      "baseline_full": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 137984,
+        "input_tokens": 175316,
+        "output_tokens": 5841,
+        "reasoning_output_tokens": 4105,
+        "total_tokens": 181157,
+        "uncached_input_tokens": 37332
+      },
+      "initial_compact": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 167936,
+        "input_tokens": 223184,
+        "output_tokens": 6205,
+        "reasoning_output_tokens": 4035,
+        "total_tokens": 229389,
+        "uncached_input_tokens": 55248
+      },
+      "tuned_compact": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 127488,
+        "input_tokens": 158352,
+        "output_tokens": 4085,
+        "reasoning_output_tokens": 2125,
+        "total_tokens": 162437,
+        "uncached_input_tokens": 30864
+      },
+      "saved_tokens": 18720,
+      "saved_percent": 10.333578056602832,
+      "uncached_input_saved_percent": 17.325618772099006
+    },
+    {
+      "model": "gpt-6-astra",
+      "status": "success",
+      "baseline_full": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 112640,
+        "input_tokens": 157210,
+        "output_tokens": 1943,
+        "reasoning_output_tokens": 98,
+        "total_tokens": 159153,
+        "uncached_input_tokens": 44570
+      },
+      "initial_compact": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 129280,
+        "input_tokens": 162649,
+        "output_tokens": 2055,
+        "reasoning_output_tokens": 248,
+        "total_tokens": 164704,
+        "uncached_input_tokens": 33369
+      },
+      "tuned_compact": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 87168,
+        "input_tokens": 125970,
+        "output_tokens": 2094,
+        "reasoning_output_tokens": 184,
+        "total_tokens": 128064,
+        "uncached_input_tokens": 38802
+      },
+      "saved_tokens": 31089,
+      "saved_percent": 19.534033288722174,
+      "uncached_input_saved_percent": 12.941440430783036
+    }
+  ]
+}

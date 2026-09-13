@@ -1,0 +1,13 @@
+matrix python=3.13 dependencies=lowest
+...............................................................          [100%]
+=============================== warnings summary ===============================
+tests/test_compact.py: 5 warnings
+tests/test_reliability.py: 8 warnings
+tests/test_responsiveness.py: 5 warnings
+tests/test_server.py: 32 warnings
+  /private/tmp/ipython-mcp-uv-cache/archive-v0/61YU7iigB-9WRgKgks3aw/lib/python3.13/site-packages/IPython/core/interactiveshell.py:937: UserWarning: Attempting to work in a virtualenv. If you encounter problems, please install IPython inside the virtualenv.
+    warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+matrix python=3.13 dependencies=locked
+...............................................................          [100%]

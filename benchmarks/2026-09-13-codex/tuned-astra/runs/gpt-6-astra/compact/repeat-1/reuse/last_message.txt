@@ -1,0 +1,1 @@
+Wrote reuse.json with one MCP execute call; helper imported fresh, remained byte-for-byte unchanged, and result retained in persistent state.

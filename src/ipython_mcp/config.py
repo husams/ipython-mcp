@@ -47,8 +47,11 @@ class ServerConfig:
     max_tool_name_chars: int = 64
     max_tool_description_chars: int = 1_024
     max_dynamic_tools: int = 100
+    profile: str = "full"
 
     def __post_init__(self) -> None:
+        if self.profile not in {"full", "compact"}:
+            raise ValueError("profile must be 'full' or 'compact'")
         for name in (
             "max_text_chars",
             "max_repr_chars",
@@ -128,6 +131,7 @@ class ServerConfig:
         workspace_text = os.getenv("IPYTHON_MCP_ENVIRONMENT_WORKSPACE", "").strip()
         active_environment = os.getenv("IPYTHON_MCP_ACTIVE_ENVIRONMENT", "").strip()
         return cls(
+            profile=os.getenv("IPYTHON_MCP_PROFILE", "full").strip().lower(),
             environment_workspace=Path(workspace_text).expanduser()
             if workspace_text
             else None,

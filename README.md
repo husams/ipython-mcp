@@ -4,16 +4,20 @@
 FastMCP. Variables, functions, classes, imports, module state, and explicitly
 registered dynamic tools survive across calls until the server lifespan ends.
 
-The FastMCP server directly owns exactly one in-process IPython
-`InteractiveShell`. Every fixed tool, dynamic-tool lookup, and dynamic call is
-serialized through one in-process boundary and works with the same live Python
-objects. There is no runtime child process or object-encoding protocol.
+The FastMCP server owns one in-process IPython `InteractiveShell` on a dedicated
+worker thread. Python execution, namespace operations and teardown are
+serialized on that thread and awaited asynchronously. Tool discovery reads
+published schema snapshots without waiting for active Python execution, so
+`tools/list` and ping remain responsive during ordinary long-running work.
+Live Python objects stay in the process; there is no runtime child process or
+object-encoding protocol.
 
 This is intentionally not a sandbox. User Python has the server process's
 permissions. Once a call starts executing Python it runs until it returns or
-raises. A tool timeout or MCP cancellation cannot safely terminate that code or
-promise that the shell remains reusable; non-cooperative code can block the
-trusted local server and requires restarting it.
+raises. Cancellation cannot terminate running Python; namespace execution and
+teardown stay serialized until it finishes. Native extensions that hold the
+GIL can still block the process. Code that never returns requires restarting
+the trusted local server.
 
 ## Install and run
 
@@ -34,6 +38,9 @@ ipython-mcp
 
 The console entry point uses stdio. It writes no non-protocol data to stdout;
 optional operational logs go to stderr and contain metadata only.
+User code receives EOF on stdin (`input()` raises `EOFError`). Owner operations
+isolate their standard streams from the transport; `execute` retains bounded
+stdout/stderr in its response, while other operations discard direct output.
 
 Register a source checkout with Codex (replace the path):
 
@@ -50,7 +57,7 @@ codex mcp add ipython -- ipython-mcp
 
 ## Stable tool surface
 
-The server publishes ten stable tools. Registered callables are additional,
+The default `full` profile publishes ten stable tools. Registered callables are additional,
 opt-in tools and are never published automatically.
 
 - `list` returns visible callables with bounded signatures, modules, and docs.
@@ -72,8 +79,55 @@ opt-in tools and are never published automatically.
 - `unregister_tool` idempotently removes requested dynamic registrations.
 
 All ten paths use the same shell and registry. Live Python objects never cross
-a process boundary and response models no longer contain request, queue,
-worker, recovery, or epoch metadata.
+a process boundary and response models contain no request, queue, worker,
+recovery, or epoch metadata.
+
+## Compact profile and reusable agent workflows
+
+Set `IPYTHON_MCP_PROFILE=compact` and restart the server to expose only
+`execute` and `call_function`. This profile omits output schemas and returns a
+single minified JSON text block that Codex CLI can read. Empty protocol fields
+are omitted; user values such as `false`, `0`, `null`, empty containers, errors
+and truncation indicators remain intact. Use `full` for discovery,
+registration, cleanup and typed `structuredContent`.
+
+The [repo skill](skills/ipython-mcp/SKILL.md) is discoverable through
+`.agents/skills/ipython-mcp`; invoke `$ipython-mcp` in this repository or
+reference its absolute path from another project. It teaches agents to load
+data once, retain live objects, batch helper calls with artifact writing and
+assertions, and return bounded summaries. Persist reusable helpers under the
+active project's `.ipython-mcp/snippets/` directory; the
+[example helper](skills/ipython-mcp/assets/helpers.py) provides a bounded CSV
+summary. Use absolute paths because the server's working directory can differ
+from the agent's. Snippet files survive server restarts; live objects do not.
+
+### Measure with Codex CLI
+
+With the project's `.venv` installed and Codex already signed in:
+
+```bash
+uv run --no-sync python scripts/codex_benchmark.py \
+  --output-dir /tmp/ipython-mcp-benchmark-new \
+  --models gpt-5.6-luna gpt-6-astra --repeats 1
+```
+
+Use a fresh output directory for each experiment. The harness compares the
+full profile without a skill against compact with the repo skill. Each case
+reuses live rows across calls, saves a helper, then starts a fresh Codex/MCP
+process to reuse that unchanged helper on another fixture. An independent
+interpreter checks outputs and helper hashes. Prompts, invocation arguments,
+raw events, actual token usage and correctness evidence are retained; a failed
+case returns a nonzero exit status. `--case MODEL/CONDITION` selects one case
+and `--timeout` bounds each CLI process.
+
+The [earlier measurements](benchmarks/2026-09-13-codex/report.md) recorded
+10.3% and 19.5% fewer total tokens with Luna and Astra on the pre-integration
+worker-process revision. They include skill-reading overhead and are
+historical evidence, not measurements of the current in-process runtime.
+The [in-process CLI verification](benchmarks/2026-09-13-in-process/report.md)
+passed with both models, including unchanged helper reuse in a fresh session;
+its four compact-profile sessions consumed 284,054 total tokens including
+cached input. It does not provide a new full-profile comparison.
 
 ## Optional startup task environment
 
@@ -147,6 +201,7 @@ credentials, and are never persisted in the environment metadata.
 
 | Environment variable | Meaning |
 | --- | --- |
+| `IPYTHON_MCP_PROFILE` | `full` (default, ten tools) or `compact` (two tools, compact JSON text replies). |
 | `IPYTHON_MCP_ENVIRONMENT_WORKSPACE` | Absolute workspace outside the project; configure with `ACTIVE_ENVIRONMENT`. |
 | `IPYTHON_MCP_ACTIVE_ENVIRONMENT` | Safe environment name (`A-Z`, `a-z`, digits, `.`, `_`, `-`; at most 64 chars). |
 | `IPYTHON_MCP_ENVIRONMENT_REQUIREMENTS` | JSON array of bounded PEP 508 requirements; requires an active environment. |
@@ -245,4 +300,5 @@ The tests cover the unconfigured startup path, direct same-process ownership,
 persistent state and dynamic tools, absence of runtime child processes and IPC
 modules, output bounds, startup variables/paths/preloads, uv reuse, conflicting
 pure-Python dependency versions across separate restarts, clean/redacted
-failures, stdio packaging flow, and the explicitly non-preemptive contract.
+failures, stdio packaging flow, the non-preemptive cancellation contract,
+responsive discovery during execution, and compact output compatibility.

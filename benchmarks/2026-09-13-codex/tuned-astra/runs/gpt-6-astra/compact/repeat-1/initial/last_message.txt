@@ -1,0 +1,1 @@
+{"rows":8,"valid_rows":5,"invalid_rows":3} — saved [result.json](/private/tmp/ipython-mcp-codex-tuned-astra-20260913/workspaces/gpt-6-astra/compact/repeat-1/result.json) using live rows; helper verified.

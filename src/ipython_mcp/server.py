@@ -7,7 +7,9 @@ from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.server.context import Context
+from fastmcp.tools import ToolResult
 
+from .compact import as_tool_result
 from .config import ServerConfig
 from .models import (
     CallFunctionResponse,
@@ -44,23 +46,47 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
         finally:
             await runtime.close()
 
+    instructions = (
+        "One persistent Python namespace. Batch known imports, helper calls, "
+        "artifact writes and assertions in execute; retain results for later "
+        "steps. Use call_function only when its direct return is sufficient; "
+        "otherwise use execute to retain and process the result. Cancellation "
+        "is non-preemptive; inspect state before replaying side effects."
+        if server_config.profile == "compact"
+        else "Execute trusted local Python in one persistent IPython namespace."
+    )
     server = FastMCP(
         "ipython-mcp",
-        instructions="Execute trusted local Python in one persistent IPython namespace.",
+        instructions=instructions,
         lifespan=lifespan,
         mask_error_details=True,
     )
-    server.tool(name="list")(list_functions)
-    server.tool(name="execute")(execute)
-    server.tool(name="call_function")(call_function)
-    server.tool(name="search")(search)
-    server.tool(name="reload")(reload)
-    server.tool(name="inspect")(inspect_name)
-    server.tool(name="remove")(remove)
-    server.tool(name="reset")(reset)
-    server.tool(name="register_tool")(register_tool)
-    server.tool(name="unregister_tool")(unregister_tool)
-    server.add_provider(DynamicToolProvider())
+    if server_config.profile == "compact":
+        server.tool(
+            name="execute",
+            description="Run Python code; inspect ok, error, and truncated.",
+            output_schema=None,
+        )(_compact_execute)
+        server.tool(
+            name="call_function",
+            description=(
+                "Call a live function when its direct return is sufficient; "
+                "otherwise use execute to retain and process the result."
+            ),
+            output_schema=None,
+        )(_compact_call_function)
+    else:
+        server.tool(name="list")(list_functions)
+        server.tool(name="execute")(execute)
+        server.tool(name="call_function")(call_function)
+        server.tool(name="search")(search)
+        server.tool(name="reload")(reload)
+        server.tool(name="inspect")(inspect_name)
+        server.tool(name="remove")(remove)
+        server.tool(name="reset")(reset)
+        server.tool(name="register_tool")(register_tool)
+        server.tool(name="unregister_tool")(unregister_tool)
+        server.add_provider(DynamicToolProvider())
     return server
 
 
@@ -153,6 +179,24 @@ async def unregister_tool(
     outcome = await _runtime(ctx).unregister_tool(names)
     await notify_tool_list_changed(ctx, outcome.catalog_changed)
     return outcome.value
+
+
+async def _compact_execute(code: str, ctx: Context) -> ToolResult:
+    """Run Python code and return one compact JSON text content block."""
+
+    outcome = await _runtime(ctx).execute_operation(code)
+    await notify_tool_list_changed(ctx, outcome.catalog_changed)
+    return as_tool_result(outcome.value)
+
+
+async def _compact_call_function(
+    name: str, arguments: dict[str, Any] | str, ctx: Context
+) -> ToolResult:
+    """Call a live function and return one compact JSON text content block."""
+
+    outcome = await _runtime(ctx).call_function_operation(name, arguments)
+    await notify_tool_list_changed(ctx, outcome.catalog_changed)
+    return as_tool_result(outcome.value)
 
 
 mcp = create_server()

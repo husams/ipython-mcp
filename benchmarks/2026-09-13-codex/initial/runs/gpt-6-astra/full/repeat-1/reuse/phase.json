@@ -1,0 +1,187 @@
+{
+  "duration_seconds": 33.070656,
+  "errors": [],
+  "last_message": "Saved reuse.json as the exact report_orders result using two MCP execute calls; state persisted, helper imported once and verified unchanged.",
+  "mcp_tool_calls": 2,
+  "mcp_tool_evidence": [
+    {
+      "arguments": {
+        "code": "import pathlib as _reuse_pathlib, sys as _reuse_sys, inspect as _reuse_inspect, hashlib as _reuse_hashlib\n_reuse_base = _reuse_pathlib.Path('/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-6-astra/full/repeat-1')\n_reuse_helper = _reuse_base / '.ipython-mcp/snippets/order_report.py'\n_reuse_before = _reuse_helper.read_bytes()\n_reuse_candidates = [(n, v) for n, v in list(globals().items()) if n == 'report_orders' and callable(v)]\n_reuse_modules = [(n, m) for n, m in list(_reuse_sys.modules.items()) if m is not None and getattr(m, '__file__', None) and _reuse_pathlib.Path(m.__file__).resolve() == _reuse_helper.resolve()]\nprint('Live callable:', [(n, str(_reuse_inspect.signature(v)), _reuse_inspect.getsourcefile(v)) for n, v in _reuse_candidates])\nprint('Loaded helper modules:', [n for n, m in _reuse_modules])\nprint('Helper source:\\n' + _reuse_before.decode())"
+      },
+      "error": null,
+      "result": {
+        "display_data": [],
+        "error": null,
+        "execution_count": 1,
+        "ok": true,
+        "result": null,
+        "runtime": {
+          "admission_sequence": 1,
+          "epoch": 1,
+          "interruption_kind": null,
+          "namespace_state": "unchanged",
+          "queue_wait_seconds": 0.000212,
+          "request_id": "ffa3be69688441ec995a421f57858292"
+        },
+        "status": "ok",
+        "stderr": "",
+        "stdout": "Live callable: []\nLoaded helper modules: []\nHelper source:\n\"\"\"Validate order rows and aggregate revenue in cents by region.\"\"\"\nimport csv\nimport re\nfrom collections.abc import Mapping\nfrom pathlib import Path\n\n\ndef _positive_integer(value):\n    if isinstance(value, bool):\n        return None\n    if isinstance(value, int):\n        return value if value > 0 else None\n    if not isinstance(value, str):\n        return None\n    value = value.strip()\n    if re.fullmatch(r\"[+]?[0-9]+\", value) is None:\n        return None\n    try:\n        number = int(value)\n    except ValueError:\n        return None\n    return number if number > 0 else None\n\n\ndef summarize_orders(rows):\n    \"\"\"Count valid/invalid rows and sum units * unit_price_cents by region.\"\"\"\n    valid_rows = invalid_rows = total_cents = 0\n    by_region = {}\n    for row in rows:\n        if not isinstance(row, Mapping):\n            invalid_rows += 1\n            continue\n        region = row.get(\"region\")\n        region = region.strip() if isinstance(region, str) else \"\"\n        units = _positive_integer(row.get(\"units\"))\n        price = _positive_integer(row.get(\"unit_price_cents\"))\n        if not region or units is None or price is None:\n            invalid_rows += 1\n            continue\n        cents = units * price\n        valid_rows += 1\n        total_cents += cents\n        by_region[region] = by_region.get(region, 0) + cents\n    return {\"valid_rows\": valid_rows, \"invalid_rows\": invalid_rows,\n            \"total_cents\": total_cents, \"by_region\": by_region}\n\n\ndef report_orders(path):\n    \"\"\"Parse a CSV path and delegate its rows to summarize_orders.\"\"\"\n    with Path(path).open(newline=\"\", encoding=\"utf-8-sig\") as source:\n        return summarize_orders(csv.DictReader(source))\n\n",
+        "truncated": {
+          "display_data": false,
+          "items": false,
+          "result": false,
+          "stderr": false,
+          "stderr_omitted_chars": 0,
+          "stdout": false,
+          "stdout_omitted_chars": 0,
+          "traceback": false
+        }
+      },
+      "status": "completed",
+      "successful": true,
+      "tool": "execute"
+    },
+    {
+      "arguments": {
+        "code": "import importlib.util as _reuse_importlib, json as _reuse_json\nif _reuse_modules:\n    _reuse_module = _reuse_modules[0][1]\n    _reuse_mode = 'reused loaded helper module'\nelse:\n    _reuse_spec = _reuse_importlib.spec_from_file_location('order_report', _reuse_helper)\n    _reuse_module = _reuse_importlib.module_from_spec(_reuse_spec)\n    _reuse_sys.modules['order_report'] = _reuse_module\n    _reuse_spec.loader.exec_module(_reuse_module)\n    _reuse_mode = 'imported helper once; no prior helper module present'\nreport_orders = _reuse_module.report_orders\n_reuse_report = report_orders(str(_reuse_base / 'orders_reuse.csv'))\n_reuse_output = _reuse_base / 'reuse.json'\n_reuse_output.write_text(_reuse_json.dumps(_reuse_report), encoding='utf-8')\nassert _reuse_json.loads(_reuse_output.read_text(encoding='utf-8')) == _reuse_report\nassert _reuse_helper.read_bytes() == _reuse_before\nprint('Saved reuse.json; JSON matches report_orders result; helper byte-for-byte unchanged; ' + _reuse_mode + '; persistent IPython state retained.')"
+      },
+      "error": null,
+      "result": {
+        "display_data": [],
+        "error": null,
+        "execution_count": 2,
+        "ok": true,
+        "result": null,
+        "runtime": {
+          "admission_sequence": 2,
+          "epoch": 1,
+          "interruption_kind": null,
+          "namespace_state": "unchanged",
+          "queue_wait_seconds": 0.000143,
+          "request_id": "7b09da71dab74f05a444aea612941fe7"
+        },
+        "status": "ok",
+        "stderr": "",
+        "stdout": "Saved reuse.json; JSON matches report_orders result; helper byte-for-byte unchanged; imported helper once; no prior helper module present; persistent IPython state retained.\n",
+        "truncated": {
+          "display_data": false,
+          "items": false,
+          "result": false,
+          "stderr": false,
+          "stderr_omitted_chars": 0,
+          "stdout": false,
+          "stdout_omitted_chars": 0,
+          "traceback": false
+        }
+      },
+      "status": "completed",
+      "successful": true,
+      "tool": "execute"
+    }
+  ],
+  "mcp_tool_failures": 0,
+  "mcp_tool_names": [
+    "execute",
+    "execute"
+  ],
+  "mcp_tool_successes": 2,
+  "returncode": 0,
+  "state_usage": {
+    "evidence": [
+      {
+        "arguments": {
+          "code": "import pathlib as _reuse_pathlib, sys as _reuse_sys, inspect as _reuse_inspect, hashlib as _reuse_hashlib\n_reuse_base = _reuse_pathlib.Path('/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-6-astra/full/repeat-1')\n_reuse_helper = _reuse_base / '.ipython-mcp/snippets/order_report.py'\n_reuse_before = _reuse_helper.read_bytes()\n_reuse_candidates = [(n, v) for n, v in list(globals().items()) if n == 'report_orders' and callable(v)]\n_reuse_modules = [(n, m) for n, m in list(_reuse_sys.modules.items()) if m is not None and getattr(m, '__file__', None) and _reuse_pathlib.Path(m.__file__).resolve() == _reuse_helper.resolve()]\nprint('Live callable:', [(n, str(_reuse_inspect.signature(v)), _reuse_inspect.getsourcefile(v)) for n, v in _reuse_candidates])\nprint('Loaded helper modules:', [n for n, m in _reuse_modules])\nprint('Helper source:\\n' + _reuse_before.decode())"
+        },
+        "error": null,
+        "result": {
+          "display_data": [],
+          "error": null,
+          "execution_count": 1,
+          "ok": true,
+          "result": null,
+          "runtime": {
+            "admission_sequence": 1,
+            "epoch": 1,
+            "interruption_kind": null,
+            "namespace_state": "unchanged",
+            "queue_wait_seconds": 0.000212,
+            "request_id": "ffa3be69688441ec995a421f57858292"
+          },
+          "status": "ok",
+          "stderr": "",
+          "stdout": "Live callable: []\nLoaded helper modules: []\nHelper source:\n\"\"\"Validate order rows and aggregate revenue in cents by region.\"\"\"\nimport csv\nimport re\nfrom collections.abc import Mapping\nfrom pathlib import Path\n\n\ndef _positive_integer(value):\n    if isinstance(value, bool):\n        return None\n    if isinstance(value, int):\n        return value if value > 0 else None\n    if not isinstance(value, str):\n        return None\n    value = value.strip()\n    if re.fullmatch(r\"[+]?[0-9]+\", value) is None:\n        return None\n    try:\n        number = int(value)\n    except ValueError:\n        return None\n    return number if number > 0 else None\n\n\ndef summarize_orders(rows):\n    \"\"\"Count valid/invalid rows and sum units * unit_price_cents by region.\"\"\"\n    valid_rows = invalid_rows = total_cents = 0\n    by_region = {}\n    for row in rows:\n        if not isinstance(row, Mapping):\n            invalid_rows += 1\n            continue\n        region = row.get(\"region\")\n        region = region.strip() if isinstance(region, str) else \"\"\n        units = _positive_integer(row.get(\"units\"))\n        price = _positive_integer(row.get(\"unit_price_cents\"))\n        if not region or units is None or price is None:\n            invalid_rows += 1\n            continue\n        cents = units * price\n        valid_rows += 1\n        total_cents += cents\n        by_region[region] = by_region.get(region, 0) + cents\n    return {\"valid_rows\": valid_rows, \"invalid_rows\": invalid_rows,\n            \"total_cents\": total_cents, \"by_region\": by_region}\n\n\ndef report_orders(path):\n    \"\"\"Parse a CSV path and delegate its rows to summarize_orders.\"\"\"\n    with Path(path).open(newline=\"\", encoding=\"utf-8-sig\") as source:\n        return summarize_orders(csv.DictReader(source))\n\n",
+          "truncated": {
+            "display_data": false,
+            "items": false,
+            "result": false,
+            "stderr": false,
+            "stderr_omitted_chars": 0,
+            "stdout": false,
+            "stdout_omitted_chars": 0,
+            "traceback": false
+          }
+        },
+        "status": "completed",
+        "successful": true,
+        "tool": "execute"
+      },
+      {
+        "arguments": {
+          "code": "import importlib.util as _reuse_importlib, json as _reuse_json\nif _reuse_modules:\n    _reuse_module = _reuse_modules[0][1]\n    _reuse_mode = 'reused loaded helper module'\nelse:\n    _reuse_spec = _reuse_importlib.spec_from_file_location('order_report', _reuse_helper)\n    _reuse_module = _reuse_importlib.module_from_spec(_reuse_spec)\n    _reuse_sys.modules['order_report'] = _reuse_module\n    _reuse_spec.loader.exec_module(_reuse_module)\n    _reuse_mode = 'imported helper once; no prior helper module present'\nreport_orders = _reuse_module.report_orders\n_reuse_report = report_orders(str(_reuse_base / 'orders_reuse.csv'))\n_reuse_output = _reuse_base / 'reuse.json'\n_reuse_output.write_text(_reuse_json.dumps(_reuse_report), encoding='utf-8')\nassert _reuse_json.loads(_reuse_output.read_text(encoding='utf-8')) == _reuse_report\nassert _reuse_helper.read_bytes() == _reuse_before\nprint('Saved reuse.json; JSON matches report_orders result; helper byte-for-byte unchanged; ' + _reuse_mode + '; persistent IPython state retained.')"
+        },
+        "error": null,
+        "result": {
+          "display_data": [],
+          "error": null,
+          "execution_count": 2,
+          "ok": true,
+          "result": null,
+          "runtime": {
+            "admission_sequence": 2,
+            "epoch": 1,
+            "interruption_kind": null,
+            "namespace_state": "unchanged",
+            "queue_wait_seconds": 0.000143,
+            "request_id": "7b09da71dab74f05a444aea612941fe7"
+          },
+          "status": "ok",
+          "stderr": "",
+          "stdout": "Saved reuse.json; JSON matches report_orders result; helper byte-for-byte unchanged; imported helper once; no prior helper module present; persistent IPython state retained.\n",
+          "truncated": {
+            "display_data": false,
+            "items": false,
+            "result": false,
+            "stderr": false,
+            "stderr_omitted_chars": 0,
+            "stdout": false,
+            "stdout_omitted_chars": 0,
+            "traceback": false
+          }
+        },
+        "status": "completed",
+        "successful": true,
+        "tool": "execute"
+      }
+    ],
+    "failed_tool_calls": 0,
+    "mcp_tool_call_count": 2,
+    "successful_tool_calls": 2,
+    "tool_names": [
+      "execute",
+      "execute"
+    ]
+  },
+  "status": "success",
+  "timed_out": false,
+  "turn_completed": true,
+  "usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 56704,
+    "input_tokens": 79140,
+    "output_tokens": 659,
+    "reasoning_output_tokens": 0,
+    "total_tokens": 79799,
+    "uncached_input_tokens": 22436
+  },
+  "usage_status": "available"
+}

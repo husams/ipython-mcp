@@ -1,0 +1,168 @@
+{
+  "catalog": {
+    "compact": {
+      "characters": 805,
+      "output_schemas": [
+        null,
+        null,
+        null
+      ],
+      "sha256": "a4503075024e70240f222781c7aa19ce9a84a9a37703f2b755c814bf513ac4a4",
+      "tool_names": [
+        "execute",
+        "call_function",
+        "runtime_status"
+      ],
+      "utf8_bytes": 805
+    },
+    "full": {
+      "characters": 25036,
+      "sha256": "64a6656aa9761fc7d13c7e3b787320c1bcf6e35d665fea4f39fae5f19f00fca7",
+      "tool_names": [
+        "list",
+        "execute",
+        "call_function",
+        "search",
+        "reload",
+        "inspect",
+        "remove",
+        "reset",
+        "register_tool",
+        "unregister_tool",
+        "runtime_status"
+      ],
+      "utf8_bytes": 25036
+    }
+  },
+  "environment": {
+    "fastmcp": "3.4.7",
+    "mcp": "1.29.0",
+    "pydantic": "2.13.4",
+    "python": "3.12.10"
+  },
+  "kind": "synthetic-live-fastmcp-wire-measurement",
+  "measurement_script_sha256": "ee9ca610f35bb29febe23a63a9a75964947dac60d19a8489bc4a60c77de2401f",
+  "network_or_model_calls": false,
+  "normalization": {
+    "catalog_models": {
+      "by_alias": true,
+      "exclude_none": true,
+      "mode": "json"
+    },
+    "content_models": {
+      "by_alias": true,
+      "exclude_none": true,
+      "mode": "json"
+    },
+    "json": {
+      "ensure_ascii": false,
+      "separators": [
+        ",",
+        ":"
+      ],
+      "sort_keys": true
+    },
+    "reply_fields": [
+      "content",
+      "isError",
+      "structuredContent"
+    ]
+  },
+  "replies": {
+    "error": {
+      "compact": {
+        "characters": 426,
+        "sha256": "690f27780fde19c2f8128091c6c697b8db5da37f898feedb3afa8f7fed23d381",
+        "utf8_bytes": 426
+      },
+      "compact_payload": {
+        "content": [
+          {
+            "text": "{\"ok\":false,\"status\":\"error\",\"stdout\":\"partial-stdout\",\"error\":{\"code\":\"execution_error\",\"message\":\"synthetic failure\",\"error_type\":\"ValueError\",\"retryable\":true,\"retry_after_seconds\":0.5,\"traceback_truncated\":true},\"runtime\":{\"epoch\":2,\"interruption_kind\":\"operation_timeout\",\"namespace_state\":\"reset\"}}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": null
+      },
+      "full": {
+        "characters": 1592,
+        "sha256": "ec3fe7daf4f6df7af4c9cf88d1b3192b32c7b3fd6b3b2a40ffe8bd1f13941402",
+        "utf8_bytes": 1592
+      }
+    },
+    "falsy": {
+      "compact": {
+        "characters": 273,
+        "sha256": "a2e008e85928e495739fdad5a309770e0cedee96fad9ab51cfd378f705ab53ae",
+        "utf8_bytes": 273
+      },
+      "compact_payload": {
+        "content": [
+          {
+            "text": "{\"ok\":true,\"status\":\"ok\",\"execution_count\":2,\"result\":{\"zero\":0,\"false\":false,\"none\":null,\"empty_string\":\"\",\"empty_list\":[],\"empty_object\":{}},\"runtime\":{\"epoch\":1}}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": null
+      },
+      "full": {
+        "characters": 1214,
+        "sha256": "744583daf159ae80ff7b4dffb1eac0c0b3607479a7389334288fd896003fa5f1",
+        "utf8_bytes": 1214
+      }
+    },
+    "scalar": {
+      "compact": {
+        "characters": 172,
+        "sha256": "3b8b60061e8731b04958c9918100cc1c9a94ff784ad6ad37b1e18660e304cab2",
+        "utf8_bytes": 172
+      },
+      "compact_payload": {
+        "content": [
+          {
+            "text": "{\"ok\":true,\"status\":\"ok\",\"execution_count\":1,\"result\":2,\"runtime\":{\"epoch\":1}}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": null
+      },
+      "full": {
+        "characters": 1026,
+        "sha256": "48d9bfea9dccfc840191171d12a63bca782bd8ea9756fb5adb3b0d4237aa06c8",
+        "utf8_bytes": 1026
+      }
+    },
+    "truncated": {
+      "compact": {
+        "characters": 297,
+        "sha256": "90d755bdf1912abb0df56eadc9607622999c0b509961cd75309767bb7108fc73",
+        "utf8_bytes": 297
+      },
+      "compact_payload": {
+        "content": [
+          {
+            "text": "{\"ok\":true,\"status\":\"ok\",\"execution_count\":3,\"result\":\"retained-result\",\"stdout\":\"retained-stdout\",\"truncated\":{\"stdout\":true,\"result\":true,\"stdout_omitted_chars\":17},\"runtime\":{\"epoch\":1}}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": null
+      },
+      "full": {
+        "characters": 1088,
+        "sha256": "c07fb14cce2fd0afcc6fe21a49d7d47d39537ff3032b6c2ead33b1a610b3b86e",
+        "utf8_bytes": 1088
+      }
+    }
+  },
+  "repository": "/Users/husam/workspace/ipython-mcp",
+  "source_sha256": {
+    "src/ipython_mcp/compact.py": "3d8da5fafbeaa8ab818d4ecd1433a44135b79fb5db7b67d58d2bd04466ca3d48",
+    "src/ipython_mcp/config.py": "baf52be1e4cb88817621c6a73fcbc4fd50ad5bdeae3bdfdcbdef7999b12e3157",
+    "src/ipython_mcp/models.py": "eec2485ad1dfba312ca2a116334d378da5af5e602251ea0bbebb337fd0f40d72",
+    "src/ipython_mcp/server.py": "5d3efda3d3cf4154e3d7c043df61839eb85153fa6a7df3e03b82a009d88e2610"
+  }
+}

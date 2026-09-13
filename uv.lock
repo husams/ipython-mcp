@@ -561,6 +561,7 @@ name = "ipython-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "fastmcp" },
     { name = "ipython" },
     { name = "packaging" },
@@ -574,6 +575,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.5,<5" },
     { name = "fastmcp", specifier = ">=3.1,<4" },
     { name = "ipython", specifier = ">=8.25,<10" },
     { name = "packaging", specifier = ">=24,<27" },

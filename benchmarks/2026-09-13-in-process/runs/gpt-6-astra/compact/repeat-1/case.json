@@ -1,0 +1,231 @@
+{
+  "oracle": {
+    "errors": [],
+    "helper_initial_match": true,
+    "helper_matches_initial_sha256": true,
+    "helper_reuse_match": true,
+    "helper_sha256": "78d1a6707bad9bd900124bb825c2dfdbae4c1b3bbb839e24244e00c237ff045a",
+    "helper_summarize_match": true,
+    "helper_unchanged_between_phases": true,
+    "initial_summary_match": true,
+    "ok": true,
+    "result_match": true,
+    "reuse_match": true,
+    "unchanged_sha256": true
+  },
+  "phases": {
+    "initial": {
+      "duration_seconds": 60.513055,
+      "errors": [],
+      "last_message": "{\"rows\":8,\"valid_rows\":5,\"invalid_rows\":3} \u2014 saved verified [result.json](/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-6-astra/compact/repeat-1/result.json) using live rows.",
+      "mcp_tool_calls": 2,
+      "mcp_tool_evidence": [
+        {
+          "arguments": {
+            "code": "import csv\nimport importlib\nimport json\nimport sys\nfrom pathlib import Path\n\nproject = Path('/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-6-astra/compact/repeat-1')\nhelper_path = project / '.ipython-mcp/snippets/order_report.py'\nhelper_path.parent.mkdir(parents=True, exist_ok=True)\nhelper_source = '''\"\"\"Validate and aggregate orders from live rows or a CSV file.\"\"\"\nimport csv\nimport re\nfrom collections.abc import Mapping\n\n\ndef _positive_integer(value):\n    if isinstance(value, bool):\n        return None\n    if isinstance(value, str):\n        value = value.strip()\n        if not re.fullmatch(r\"[+-]?[0-9]+\", value):\n            return None\n        try:\n            value = int(value)\n        except ValueError:\n            return None\n    if not isinstance(value, int) or value <= 0:\n        return None\n    return value\n\n\ndef summarize_orders(rows):\n    \"\"\"Count valid/invalid rows and sum valid order cents by trimmed region.\"\"\"\n    result = {\"valid_rows\": 0, \"invalid_rows\": 0, \"total_cents\": 0, \"by_region\": {}}\n    for row in rows:\n        if not isinstance(row, Mapping):\n            result[\"invalid_rows\"] += 1\n            continue\n        region = row.get(\"region\")\n        region = region.strip() if isinstance(region, str) else \"\"\n        units = _positive_integer(row.get(\"units\"))\n        price = _positive_integer(row.get(\"unit_price_cents\"))\n        if not region or units is None or price is None:\n            result[\"invalid_rows\"] += 1\n            continue\n        cents = units * price\n        result[\"valid_rows\"] += 1\n        result[\"total_cents\"] += cents\n        result[\"by_region\"][region] = result[\"by_region\"].get(region, 0) + cents\n    return result\n\n\ndef report_orders(path):\n    \"\"\"Parse a CSV path and delegate validation and aggregation.\"\"\"\n    with open(path, newline=\"\", encoding=\"utf-8-sig\") as source:\n        return summarize_orders(csv.DictReader(source))\n'''\nhelper_path.write_text(helper_source, encoding='utf-8')\nsys.path.insert(0, str(helper_path.parent))\nimport order_report\norder_report = importlib.reload(order_report)\nwith (project / 'orders_initial.csv').open(newline='', encoding='utf-8-sig') as source:\n    rows = list(csv.DictReader(source))\ninitial_analysis = order_report.summarize_orders(rows)\ninitial_summary = {'rows': len(rows), 'valid_rows': initial_analysis['valid_rows'], 'invalid_rows': initial_analysis['invalid_rows']}\nassert initial_summary['rows'] == initial_summary['valid_rows'] + initial_summary['invalid_rows']\ninitial_summary"
+          },
+          "error": null,
+          "result": {
+            "execution_count": 1,
+            "ok": true,
+            "result": {
+              "invalid_rows": 3,
+              "rows": 8,
+              "valid_rows": 5
+            },
+            "status": "ok"
+          },
+          "status": "completed",
+          "successful": true,
+          "tool": "execute"
+        },
+        {
+          "arguments": {
+            "code": "from io import StringIO\nfrom unittest.mock import patch\n\nvalidation_rows = [\n    {'region': ' North ', 'units': '2', 'unit_price_cents': '100'},\n    {'region': 'North', 'units': 3, 'unit_price_cents': 10},\n    {'region': ' ', 'units': '1', 'unit_price_cents': '5'},\n    {'region': 'South', 'units': '0', 'unit_price_cents': '5'},\n    {'region': 'South', 'units': '-1', 'unit_price_cents': '5'},\n    {'region': 'South', 'units': '1.5', 'unit_price_cents': '5'},\n    {'region': 'South', 'units': True, 'unit_price_cents': '5'},\n    {'region': 'South', 'units': '1', 'unit_price_cents': None},\n    {'region': 'South', 'units': '1', 'unit_price_cents': '0'},\n    {'region': 'South', 'units': '1', 'unit_price_cents': 2.5},\n    {}, None,\n]\nassert order_report.summarize_orders(validation_rows) == {'valid_rows': 2, 'invalid_rows': 10, 'total_cents': 230, 'by_region': {'North': 230}}\nassert order_report.summarize_orders([]) == {'valid_rows': 0, 'invalid_rows': 0, 'total_cents': 0, 'by_region': {}}\nwith patch('builtins.open', return_value=StringIO('region,units,unit_price_cents\\nWest,2,50\\n,1,10\\n')), patch.object(order_report, 'summarize_orders', wraps=order_report.summarize_orders) as delegate:\n    assert order_report.report_orders(project / 'wrapper-test.csv') == {'valid_rows': 1, 'invalid_rows': 1, 'total_cents': 100, 'by_region': {'West': 100}}\n    delegate.assert_called_once()\n\nreport = order_report.summarize_orders(rows)\nassert report == initial_analysis\nassert report['valid_rows'] + report['invalid_rows'] == len(rows)\nassert report['total_cents'] == sum(report['by_region'].values())\nresult = {'initial_summary': initial_summary, 'report': report}\noutput_path = project / 'result.json'\noutput_path.write_text(json.dumps(result, indent=2) + '\\n', encoding='utf-8')\nassert json.loads(output_path.read_text(encoding='utf-8')) == result\n{'initial_summary': initial_summary, 'saved': str(output_path), 'verified': True}"
+          },
+          "error": null,
+          "result": {
+            "execution_count": 2,
+            "ok": true,
+            "result": {
+              "initial_summary": {
+                "invalid_rows": 3,
+                "rows": 8,
+                "valid_rows": 5
+              },
+              "saved": "/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-6-astra/compact/repeat-1/result.json",
+              "verified": true
+            },
+            "status": "ok"
+          },
+          "status": "completed",
+          "successful": true,
+          "tool": "execute"
+        }
+      ],
+      "mcp_tool_failures": 0,
+      "mcp_tool_names": [
+        "execute",
+        "execute"
+      ],
+      "mcp_tool_successes": 2,
+      "returncode": 0,
+      "state_usage": {
+        "evidence": [
+          {
+            "arguments": {
+              "code": "import csv\nimport importlib\nimport json\nimport sys\nfrom pathlib import Path\n\nproject = Path('/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-6-astra/compact/repeat-1')\nhelper_path = project / '.ipython-mcp/snippets/order_report.py'\nhelper_path.parent.mkdir(parents=True, exist_ok=True)\nhelper_source = '''\"\"\"Validate and aggregate orders from live rows or a CSV file.\"\"\"\nimport csv\nimport re\nfrom collections.abc import Mapping\n\n\ndef _positive_integer(value):\n    if isinstance(value, bool):\n        return None\n    if isinstance(value, str):\n        value = value.strip()\n        if not re.fullmatch(r\"[+-]?[0-9]+\", value):\n            return None\n        try:\n            value = int(value)\n        except ValueError:\n            return None\n    if not isinstance(value, int) or value <= 0:\n        return None\n    return value\n\n\ndef summarize_orders(rows):\n    \"\"\"Count valid/invalid rows and sum valid order cents by trimmed region.\"\"\"\n    result = {\"valid_rows\": 0, \"invalid_rows\": 0, \"total_cents\": 0, \"by_region\": {}}\n    for row in rows:\n        if not isinstance(row, Mapping):\n            result[\"invalid_rows\"] += 1\n            continue\n        region = row.get(\"region\")\n        region = region.strip() if isinstance(region, str) else \"\"\n        units = _positive_integer(row.get(\"units\"))\n        price = _positive_integer(row.get(\"unit_price_cents\"))\n        if not region or units is None or price is None:\n            result[\"invalid_rows\"] += 1\n            continue\n        cents = units * price\n        result[\"valid_rows\"] += 1\n        result[\"total_cents\"] += cents\n        result[\"by_region\"][region] = result[\"by_region\"].get(region, 0) + cents\n    return result\n\n\ndef report_orders(path):\n    \"\"\"Parse a CSV path and delegate validation and aggregation.\"\"\"\n    with open(path, newline=\"\", encoding=\"utf-8-sig\") as source:\n        return summarize_orders(csv.DictReader(source))\n'''\nhelper_path.write_text(helper_source, encoding='utf-8')\nsys.path.insert(0, str(helper_path.parent))\nimport order_report\norder_report = importlib.reload(order_report)\nwith (project / 'orders_initial.csv').open(newline='', encoding='utf-8-sig') as source:\n    rows = list(csv.DictReader(source))\ninitial_analysis = order_report.summarize_orders(rows)\ninitial_summary = {'rows': len(rows), 'valid_rows': initial_analysis['valid_rows'], 'invalid_rows': initial_analysis['invalid_rows']}\nassert initial_summary['rows'] == initial_summary['valid_rows'] + initial_summary['invalid_rows']\ninitial_summary"
+            },
+            "error": null,
+            "result": {
+              "execution_count": 1,
+              "ok": true,
+              "result": {
+                "invalid_rows": 3,
+                "rows": 8,
+                "valid_rows": 5
+              },
+              "status": "ok"
+            },
+            "status": "completed",
+            "successful": true,
+            "tool": "execute"
+          },
+          {
+            "arguments": {
+              "code": "from io import StringIO\nfrom unittest.mock import patch\n\nvalidation_rows = [\n    {'region': ' North ', 'units': '2', 'unit_price_cents': '100'},\n    {'region': 'North', 'units': 3, 'unit_price_cents': 10},\n    {'region': ' ', 'units': '1', 'unit_price_cents': '5'},\n    {'region': 'South', 'units': '0', 'unit_price_cents': '5'},\n    {'region': 'South', 'units': '-1', 'unit_price_cents': '5'},\n    {'region': 'South', 'units': '1.5', 'unit_price_cents': '5'},\n    {'region': 'South', 'units': True, 'unit_price_cents': '5'},\n    {'region': 'South', 'units': '1', 'unit_price_cents': None},\n    {'region': 'South', 'units': '1', 'unit_price_cents': '0'},\n    {'region': 'South', 'units': '1', 'unit_price_cents': 2.5},\n    {}, None,\n]\nassert order_report.summarize_orders(validation_rows) == {'valid_rows': 2, 'invalid_rows': 10, 'total_cents': 230, 'by_region': {'North': 230}}\nassert order_report.summarize_orders([]) == {'valid_rows': 0, 'invalid_rows': 0, 'total_cents': 0, 'by_region': {}}\nwith patch('builtins.open', return_value=StringIO('region,units,unit_price_cents\\nWest,2,50\\n,1,10\\n')), patch.object(order_report, 'summarize_orders', wraps=order_report.summarize_orders) as delegate:\n    assert order_report.report_orders(project / 'wrapper-test.csv') == {'valid_rows': 1, 'invalid_rows': 1, 'total_cents': 100, 'by_region': {'West': 100}}\n    delegate.assert_called_once()\n\nreport = order_report.summarize_orders(rows)\nassert report == initial_analysis\nassert report['valid_rows'] + report['invalid_rows'] == len(rows)\nassert report['total_cents'] == sum(report['by_region'].values())\nresult = {'initial_summary': initial_summary, 'report': report}\noutput_path = project / 'result.json'\noutput_path.write_text(json.dumps(result, indent=2) + '\\n', encoding='utf-8')\nassert json.loads(output_path.read_text(encoding='utf-8')) == result\n{'initial_summary': initial_summary, 'saved': str(output_path), 'verified': True}"
+            },
+            "error": null,
+            "result": {
+              "execution_count": 2,
+              "ok": true,
+              "result": {
+                "initial_summary": {
+                  "invalid_rows": 3,
+                  "rows": 8,
+                  "valid_rows": 5
+                },
+                "saved": "/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-6-astra/compact/repeat-1/result.json",
+                "verified": true
+              },
+              "status": "ok"
+            },
+            "status": "completed",
+            "successful": true,
+            "tool": "execute"
+          }
+        ],
+        "failed_tool_calls": 0,
+        "mcp_tool_call_count": 2,
+        "successful_tool_calls": 2,
+        "tool_names": [
+          "execute",
+          "execute"
+        ]
+      },
+      "status": "success",
+      "timed_out": false,
+      "turn_completed": true,
+      "usage": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 34944,
+        "input_tokens": 72510,
+        "output_tokens": 1650,
+        "reasoning_output_tokens": 176,
+        "total_tokens": 74160,
+        "uncached_input_tokens": 37566
+      },
+      "usage_status": "available"
+    },
+    "reuse": {
+      "duration_seconds": 25.63937,
+      "errors": [],
+      "last_message": "Created reuse.json with one MCP execute call; no prior module state existed, and the helper remained byte-for-byte unchanged.",
+      "mcp_tool_calls": 1,
+      "mcp_tool_evidence": [
+        {
+          "arguments": {
+            "code": "import sys\nimport json\nimport hashlib\nfrom pathlib import Path\nimport importlib\n\n_reuse_root = Path('/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-6-astra/compact/repeat-1')\n_reuse_helper = _reuse_root / '.ipython-mcp/snippets/order_report.py'\n_reuse_before = hashlib.sha256(_reuse_helper.read_bytes()).hexdigest()\n_reuse_module_cached = 'order_report' in sys.modules\n_reuse_live_function = callable(globals().get('report_orders'))\nif str(_reuse_helper.parent) not in sys.path:\n    sys.path.insert(0, str(_reuse_helper.parent))\n_reuse_module = importlib.import_module('order_report')\nassert Path(_reuse_module.__file__).resolve() == _reuse_helper.resolve()\n_reuse_result = _reuse_module.report_orders(str(_reuse_root / 'orders_reuse.csv'))\n_reuse_output = _reuse_root / 'reuse.json'\n_reuse_output.write_text(json.dumps(_reuse_result), encoding='utf-8')\nassert _reuse_output.read_text(encoding='utf-8') == json.dumps(_reuse_result)\nassert hashlib.sha256(_reuse_helper.read_bytes()).hexdigest() == _reuse_before\n{'output': str(_reuse_output), 'module_reused': _reuse_module_cached, 'prior_live_report_orders': _reuse_live_function, 'helper_unchanged': True, 'result_type': type(_reuse_result).__name__}"
+          },
+          "error": null,
+          "result": {
+            "execution_count": 1,
+            "ok": true,
+            "result": {
+              "helper_unchanged": true,
+              "module_reused": false,
+              "output": "/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-6-astra/compact/repeat-1/reuse.json",
+              "prior_live_report_orders": false,
+              "result_type": "dict"
+            },
+            "status": "ok"
+          },
+          "status": "completed",
+          "successful": true,
+          "tool": "execute"
+        }
+      ],
+      "mcp_tool_failures": 0,
+      "mcp_tool_names": [
+        "execute"
+      ],
+      "mcp_tool_successes": 1,
+      "returncode": 0,
+      "state_usage": {
+        "evidence": [
+          {
+            "arguments": {
+              "code": "import sys\nimport json\nimport hashlib\nfrom pathlib import Path\nimport importlib\n\n_reuse_root = Path('/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-6-astra/compact/repeat-1')\n_reuse_helper = _reuse_root / '.ipython-mcp/snippets/order_report.py'\n_reuse_before = hashlib.sha256(_reuse_helper.read_bytes()).hexdigest()\n_reuse_module_cached = 'order_report' in sys.modules\n_reuse_live_function = callable(globals().get('report_orders'))\nif str(_reuse_helper.parent) not in sys.path:\n    sys.path.insert(0, str(_reuse_helper.parent))\n_reuse_module = importlib.import_module('order_report')\nassert Path(_reuse_module.__file__).resolve() == _reuse_helper.resolve()\n_reuse_result = _reuse_module.report_orders(str(_reuse_root / 'orders_reuse.csv'))\n_reuse_output = _reuse_root / 'reuse.json'\n_reuse_output.write_text(json.dumps(_reuse_result), encoding='utf-8')\nassert _reuse_output.read_text(encoding='utf-8') == json.dumps(_reuse_result)\nassert hashlib.sha256(_reuse_helper.read_bytes()).hexdigest() == _reuse_before\n{'output': str(_reuse_output), 'module_reused': _reuse_module_cached, 'prior_live_report_orders': _reuse_live_function, 'helper_unchanged': True, 'result_type': type(_reuse_result).__name__}"
+            },
+            "error": null,
+            "result": {
+              "execution_count": 1,
+              "ok": true,
+              "result": {
+                "helper_unchanged": true,
+                "module_reused": false,
+                "output": "/private/tmp/ipython-mcp-postintegration-20260913/workspaces/gpt-6-astra/compact/repeat-1/reuse.json",
+                "prior_live_report_orders": false,
+                "result_type": "dict"
+              },
+              "status": "ok"
+            },
+            "status": "completed",
+            "successful": true,
+            "tool": "execute"
+          }
+        ],
+        "failed_tool_calls": 0,
+        "mcp_tool_call_count": 1,
+        "successful_tool_calls": 1,
+        "tool_names": [
+          "execute"
+        ]
+      },
+      "status": "success",
+      "timed_out": false,
+      "turn_completed": true,
+      "usage": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 33664,
+        "input_tokens": 52216,
+        "output_tokens": 465,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 52681,
+        "uncached_input_tokens": 18552
+      },
+      "usage_status": "available"
+    }
+  },
+  "status": "success",
+  "task_correctness": true,
+  "usage_total": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 68608,
+    "input_tokens": 124726,
+    "output_tokens": 2115,
+    "reasoning_output_tokens": 176,
+    "total_tokens": 126841,
+    "uncached_input_tokens": 56118
+  }
+}

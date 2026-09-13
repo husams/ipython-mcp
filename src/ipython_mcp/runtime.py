@@ -13,15 +13,18 @@ import json
 import logging
 import heapq
 import sys
+import threading
 import traceback
+from concurrent.futures import Future, ThreadPoolExecutor
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, fields, is_dataclass
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 from IPython.core.interactiveshell import InteractiveShell
 from IPython.core.displayhook import DisplayHook
+from anyio import CancelScope
 
 from .config import ServerConfig
 from .dynamic_tools import DynamicRegistry, DynamicToolSnapshot, OperationResult
@@ -122,19 +125,51 @@ class BoundedTextSink(io.TextIOBase):
         return "".join(self._parts)
 
 
+class _DiscardingTextSink(io.TextIOBase):
+    """A writable stream that prevents owner-side output corrupting stdio."""
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, value: str) -> int:
+        return len(value) if isinstance(value, str) else len(str(value))
+
+
+@contextlib.contextmanager
+def _eof_user_stdin():
+    """Prevent user code from consuming the MCP transport's stdin stream."""
+
+    previous = sys.stdin
+    sys.stdin = io.StringIO("")
+    try:
+        yield
+    finally:
+        sys.stdin = previous
+
+
 class ShellRuntime:
     """Own the only IPython shell and serialize direct in-process operations."""
 
     def __init__(self, config: ServerConfig):
         self.config = config
-        self._lock = asyncio.Lock()
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="ipython-mcp-shell"
+        )
         self._shell: InteractiveShell | None = None
         self._module_bindings: dict[str, str] = {}
         self._runtime_bindings: dict[str, Any] = {}
         self._startup_environment = StartupEnvironment(config)
         self._execution_count = 0
         self._closed = False
+        self._closing = False
+        self._close_future: Future[Any] | None = None
+        self._lifecycle_lock = threading.Lock()
         self._dynamic_registry = DynamicRegistry(config, STABLE_TOOL_NAMES)
+        # Owner-produced immutable-by-copy snapshots keep discovery off the
+        # shell queue while user Python is executing.
+        self._dynamic_tool_cache: dict[str, DynamicToolSnapshot] = {}
+        self._catalog_revision = 0
+        self._dynamic_tool_count = 0
 
     @property
     def closed(self) -> bool:
@@ -143,33 +178,41 @@ class ShellRuntime:
         return self._closed
 
     async def start(self) -> None:
-        async with self._lock:
-            if self._shell is not None:
-                return
-            try:
-                self._start_in_process()
-            except Exception:
-                self._closed = True
-                raise
+        if self._closed or self._closing:
+            raise RuntimeError("IPython runtime is closed")
+        future = self._executor.submit(self._run_in_owner, self._start_in_process)
+        try:
+            await asyncio.shield(asyncio.wrap_future(future))
+        except asyncio.CancelledError:
+            # The owner cannot be interrupted. Queue teardown as a completion
+            # callback so repeated cancellation cannot strand the executor.
+            self._closing = True
+            future.add_done_callback(self._finish_cancelled_start)
+            raise
+        except BaseException:
+            self._closed = True
+            self._shutdown_executor()
+            raise
 
     async def close(self) -> None:
         if self._closed:
             return
-        async with self._lock:
-            if self._closed:
-                return
-            try:
-                self._close_in_process()
-            finally:
-                self._closed = True
+        if self._close_future is not None:
+            wrapped = asyncio.wrap_future(self._close_future)
+            await self._await_close(wrapped)
+            return
+        self._queue_close()
+        assert self._close_future is not None
+        wrapped = asyncio.wrap_future(self._close_future)
+        await self._await_close(wrapped)
 
     @property
     def catalog_revision(self) -> int:
-        return self._dynamic_registry.revision
+        return self._catalog_revision
 
     @property
     def dynamic_tool_count(self) -> int:
-        return self._dynamic_registry.active_count
+        return self._dynamic_tool_count
 
     async def execute(self, code: str) -> ExecuteResponse:
         if not isinstance(code, str) or not code.strip():
@@ -193,9 +236,12 @@ class ShellRuntime:
                         ),
                     ),
                     self._dynamic_registry.reconcile(self.shell.user_ns),
-                )
+                ),
+                operation_result=True,
             )
-        return await self._submit(lambda: self._execute_operation_in_owner(code))
+        return await self._submit(
+            lambda: self._execute_operation_in_owner(code), operation_result=True
+        )
 
     async def list_functions(self) -> ListResponse:
         return await self._submit(self._list_functions_in_owner)
@@ -241,67 +287,163 @@ class ShellRuntime:
         return (await self.remove_operation(names)).value
 
     async def remove_operation(self, names: list[str]) -> OperationResult[RemoveResponse]:
-        return await self._submit(lambda: self._remove_operation_in_owner(names))
+        return await self._submit(
+            lambda: self._remove_operation_in_owner(names), operation_result=True
+        )
 
     async def reset(self) -> ResetResponse:
         return (await self.reset_operation()).value
 
     async def reset_operation(self) -> OperationResult[ResetResponse]:
-        return await self._submit(self._reset_operation_in_owner)
+        return await self._submit(self._reset_operation_in_owner, operation_result=True)
 
     async def register_tool(
         self, name: str, tool_name: str | None, description: str | None
     ) -> OperationResult[RegisterToolResponse]:
         return await self._submit(
-            lambda: self._register_tool_in_owner(name, tool_name, description)
+            lambda: self._register_tool_in_owner(name, tool_name, description),
+            operation_result=True,
         )
 
     async def unregister_tool(
         self, names: list[str]
     ) -> OperationResult[UnregisterToolResponse]:
         return await self._submit(
-            lambda: self._dynamic_registry.unregister(self.shell.user_ns, names)
+            lambda: self._dynamic_registry.unregister(self.shell.user_ns, names),
+            operation_result=True,
         )
 
-    async def dynamic_tools(self) -> OperationResult[list[DynamicToolSnapshot]]:
-        return await self._submit(
-            lambda: self._dynamic_registry.snapshots(self.shell.user_ns)
+    async def dynamic_tools(
+        self, *, include_stale: bool = False
+    ) -> OperationResult[list[DynamicToolSnapshot]]:
+        return OperationResult(
+            [
+                self._copy_snapshot(snapshot)
+                for snapshot in sorted(
+                    self._dynamic_tool_cache.values(), key=lambda item: item.name
+                )
+                if include_stale or snapshot.active
+            ]
         )
 
     async def dynamic_tool(
         self, name: str
     ) -> OperationResult[DynamicToolSnapshot | None]:
-        return await self._submit(
-            lambda: self._dynamic_registry.snapshot(self.shell.user_ns, name)
+        snapshot = self._dynamic_tool_cache.get(name)
+        return OperationResult(
+            None if snapshot is None else self._copy_snapshot(snapshot)
         )
 
     async def call_dynamic(
         self, name: str, arguments: dict[str, Any]
     ) -> OperationResult[CallFunctionResponse]:
         return await self._submit(
-            lambda: self._call_dynamic_in_owner(name, arguments)
+            lambda: self._call_dynamic_in_owner(name, arguments),
+            operation_result=True,
         )
 
-    async def _submit(self, operation: Callable[[], Any]) -> Any:
-        async with self._lock:
-            if self._closed:
-                raise RuntimeError("IPython runtime is closed")
-            # Deliberately execute synchronously in the server process. Once
-            # dispatched, cancellation cannot pretend to preempt user Python;
-            # non-cooperative code requires restarting the local server.
-            return operation()
+    async def _submit(
+        self, operation: Callable[[], Any], *, operation_result: bool = False
+    ) -> Any:
+        if self._closed or self._closing:
+            raise RuntimeError("IPython runtime is closed")
+        future = self._executor.submit(self._run_in_owner, operation)
+        result = await asyncio.wrap_future(future)
+        return result if operation_result else result.value
 
     async def _plain_operation(
         self, operation: Callable[[], Any]
     ) -> OperationResult[Any]:
-        async with self._lock:
-            if self._closed:
-                raise RuntimeError("IPython runtime is closed")
-            value = operation()
-            changed = self._dynamic_registry.reconcile(self.shell.user_ns)
-            return OperationResult(value, changed)
+        return await self._submit(operation, operation_result=True)
+
+    @staticmethod
+    async def _await_close(wrapped: asyncio.Future[Any]) -> Any:
+        """Keep lifespan teardown alive through AnyIO cancellation scopes."""
+
+        with CancelScope(shield=True):
+            return await asyncio.shield(wrapped)
+
+    def _run_in_owner(self, operation: Callable[[], Any]) -> OperationResult[Any]:
+        """Run one operation and reconcile the catalog before releasing ownership."""
+
+        raw: Any = None
+        operation_error: BaseException | None = None
+        with _eof_user_stdin(), contextlib.redirect_stdout(
+            _DiscardingTextSink()
+        ), contextlib.redirect_stderr(_DiscardingTextSink()):
+            try:
+                raw = operation()
+            except BaseException as exc:
+                operation_error = exc
+            changed = self._refresh_dynamic_cache_in_owner()
+        if operation_error is not None:
+            raise operation_error
+        if isinstance(raw, OperationResult):
+            return OperationResult(raw.value, raw.catalog_changed or changed)
+        return OperationResult(raw, changed)
+
+    def _refresh_dynamic_cache_in_owner(self) -> bool:
+        if self._shell is None:
+            return False
+        changed = self._dynamic_registry.reconcile(self.shell.user_ns)
+        snapshots = self._dynamic_registry.snapshots(
+            self.shell.user_ns, include_stale=True
+        )
+        changed = changed or snapshots.catalog_changed
+        self._dynamic_tool_cache = {
+            snapshot.name: self._copy_snapshot(snapshot)
+            for snapshot in snapshots.value
+        }
+        self._catalog_revision = self._dynamic_registry.revision
+        self._dynamic_tool_count = self._dynamic_registry.active_count
+        return changed
+
+    @staticmethod
+    def _copy_snapshot(snapshot: DynamicToolSnapshot) -> DynamicToolSnapshot:
+        return DynamicToolSnapshot(
+            name=snapshot.name,
+            description=snapshot.description,
+            input_schema=json.loads(json.dumps(snapshot.input_schema)),
+            active=snapshot.active,
+        )
+
+    def _finish_close(self, _: Any) -> None:
+        self._closed = True
+        self._shutdown_executor()
+
+    def _finish_cancelled_start(self, future: Any) -> None:
+        if future.cancelled():
+            self._closed = True
+            self._shutdown_executor()
+            return
+        with contextlib.suppress(BaseException):
+            if future.exception() is not None:
+                self._closed = True
+                self._shutdown_executor()
+                return
+        if self._shell is None:
+            self._closed = True
+            self._shutdown_executor()
+            return
+        self._queue_close()
+
+    def _queue_close(self) -> None:
+        with self._lifecycle_lock:
+            if self._close_future is not None:
+                return
+            self._closing = True
+            future = self._executor.submit(self._run_in_owner, self._close_in_process)
+            self._close_future = future
+            future.add_done_callback(self._finish_close)
+
+    def _shutdown_executor(self) -> None:
+        # Owner work is complete before this callback runs. A nonblocking
+        # shutdown keeps cancellation and MCP teardown off the event loop.
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
     def _start_in_process(self) -> None:
+        if self._shell is not None:
+            return
         imported: dict[str, ModuleType] = {}
         current_module: str | None = None
         try:
@@ -323,7 +465,17 @@ class ShellRuntime:
 
         # IPython's public display() helper publishes rich output only when an
         # active singleton exists. The server process owns exactly one shell.
-        self._shell = InteractiveShell.instance()
+        startup_path = (
+            list(sys.path)
+            if self._startup_environment.site_packages is not None
+            else None
+        )
+        try:
+            self._shell = InteractiveShell.instance()
+        finally:
+            if startup_path is not None:
+                sys.path[:] = startup_path
+        self._restore_selected_environment_precedence()
         # This server is a transient MCP process, not an IPython profile. Do
         # not write source, results, or history metadata to the user's global
         # history database.
@@ -347,6 +499,11 @@ class ShellRuntime:
                 f"task environment startup failed during binding: {type(exc).__name__}"
             ) from exc
 
+    def _restore_selected_environment_precedence(self) -> None:
+        """Keep the selected environment ahead of IPython's virtualenv path."""
+
+        self._startup_environment.prioritize_site_packages()
+
     def _close_in_process(self) -> None:
         if self._shell is not None:
             shell = self._shell
@@ -361,6 +518,8 @@ class ShellRuntime:
         self._runtime_bindings.clear()
         self._module_bindings.clear()
         self._dynamic_registry.close()
+        self._dynamic_tool_cache = {}
+        self._dynamic_tool_count = 0
         self._startup_environment.restore()
 
     @staticmethod
@@ -432,7 +591,10 @@ class ShellRuntime:
 
                 self.shell.display_pub.publish = publish
                 try:
-                    run_result = self.shell.run_cell(code, store_history=False, silent=False)
+                    with _eof_user_stdin():
+                        run_result = self.shell.run_cell(
+                            code, store_history=False, silent=False
+                        )
                 finally:
                     self.shell.showtraceback = showtraceback
                     self.shell.showsyntaxerror = showsyntaxerror
@@ -488,7 +650,7 @@ class ShellRuntime:
             try:
                 result, result_truncated = self._json_safe(result)
                 truncation.result = result_truncated
-            except JsonTranslationError as exc:
+            except JsonTranslationError:
                 live_result = getattr(run_result, "result", None)
                 result = {
                     "json_compatible": False,
@@ -591,8 +753,9 @@ class ShellRuntime:
         except (TypeError, ValueError) as exc:
             return CallFunctionResponse(ok=False, name=name, error=ErrorInfo(code="argument_binding_error", message=str(exc), error_type=type(exc).__name__))
         try:
-            value = target(**parsed)
-        except Exception as exc:
+            with _eof_user_stdin():
+                value = target(**parsed)
+        except BaseException as exc:
             logger.info("tool=call_function ok=false")
             return CallFunctionResponse(ok=False, name=name, error=self._error_info("callable_error", exc))
         try:
@@ -896,8 +1059,9 @@ class ShellRuntime:
             assert entry is not None
             target = entry.callable_object
         try:
-            value = target(**coerced)
-        except Exception as exc:
+            with _eof_user_stdin():
+                value = target(**coerced)
+        except BaseException as exc:
             response = CallFunctionResponse(
                 ok=False,
                 name=name,

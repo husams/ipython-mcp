@@ -117,30 +117,192 @@ def test_unconfigured_shell_is_direct_in_process_and_starts_no_runtime_child():
     asyncio.run(scenario())
 
 
-def test_started_operation_is_not_preempted_by_timeout_or_cancellation():
+def test_started_operation_is_not_preempted_by_timeout_or_cancellation(tmp_path: Path):
     async def scenario():
         runtime = ShellRuntime(ServerConfig())
         await runtime.start()
+        original_stdin = sys.stdin
         try:
             started = time.monotonic()
-            async with asyncio.timeout(0.01):
-                result = await runtime.execute("import time\ntime.sleep(0.06)\n'finished'")
-            assert result.result == "finished"
-            assert time.monotonic() - started >= 0.05
+            with pytest.raises(asyncio.TimeoutError):
+                async with asyncio.timeout(0.01):
+                    await runtime.execute("import time\ntime.sleep(0.06)\n'finished'")
+            assert time.monotonic() - started < 0.05
 
-            loop = asyncio.get_running_loop()
+            started_marker = tmp_path / "cancel.started"
+            release_marker = tmp_path / "cancel.release"
+            started_literal = json.dumps(str(started_marker))
+            release_literal = json.dumps(str(release_marker))
             task = asyncio.create_task(
-                runtime.execute("import time\ntime.sleep(0.06)\n'not-preempted'")
+                runtime.execute(
+                    "from pathlib import Path\n"
+                    "import time\n"
+                    "import sys\n"
+                    f"_cancel_started = Path({started_literal})\n"
+                    f"_cancel_release = Path({release_literal})\n"
+                    "_cancel_started.write_text('started', encoding='utf-8')\n"
+                    "while not _cancel_release.exists():\n"
+                    "    time.sleep(0.01)\n"
+                    "cancel_stdin_type = type(sys.stdin).__name__\n"
+                    "cancel_completed = True\n"
+                    "'finished'"
+                )
             )
-            timer = threading.Timer(0.01, lambda: loop.call_soon_threadsafe(task.cancel))
-            timer.start()
-            try:
-                assert (await task).result == "not-preempted"
-            finally:
-                timer.cancel()
-            assert (await runtime.execute("'still-same-shell'" )).result == "still-same-shell"
+            for _ in range(100):
+                if started_marker.exists():
+                    break
+                await asyncio.sleep(0.01)
+            assert started_marker.exists()
+
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+            # The canceled owner operation is still running; a later queued
+            # request is canceled before admission and must never execute.
+            queued = asyncio.create_task(runtime.execute("queued_ran = True"))
+            queued.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await queued
+            release_marker.touch()
+            await asyncio.sleep(0.07)
+            assert (await runtime.execute("cancel_completed")).result is True
+            assert (await runtime.execute("cancel_stdin_type")).result == "StringIO"
+            assert (await runtime.execute("'queued_ran' in globals()")).result is False
+            assert sys.stdin is original_stdin
         finally:
             await runtime.close()
+
+    asyncio.run(scenario())
+
+
+def test_user_stdin_is_eof_and_restored_after_errors():
+    async def scenario():
+        runtime = ShellRuntime(ServerConfig())
+        await runtime.start()
+        original_stdin = sys.stdin
+        try:
+            observed = await runtime.execute(
+                "import sys\n(type(sys.stdin).__name__, sys.stdin.readline())"
+            )
+            assert observed.result == ["StringIO", ""]
+            assert sys.stdin is original_stdin
+
+            await runtime.execute(
+                "def read_user_stdin() -> tuple[str, str]:\n"
+                "    import sys\n"
+                "    return type(sys.stdin).__name__, sys.stdin.readline()\n"
+            )
+            called = await runtime.call_function("read_user_stdin", {})
+            assert called.result == ["StringIO", ""]
+            assert sys.stdin is original_stdin
+
+            failed = await runtime.execute("raise RuntimeError('stdin cleanup')")
+            assert failed.ok is False
+            assert sys.stdin is original_stdin
+        finally:
+            await runtime.close()
+
+    asyncio.run(scenario())
+
+
+def test_canceled_close_does_not_block_event_loop_and_finishes_after_owner_work(
+    tmp_path: Path,
+):
+    async def scenario():
+        runtime = ShellRuntime(ServerConfig())
+        await runtime.start()
+        started_marker = tmp_path / "close.started"
+        release_marker = tmp_path / "close.release"
+        started_literal = json.dumps(str(started_marker))
+        release_literal = json.dumps(str(release_marker))
+        running = None
+        try:
+            running = asyncio.create_task(
+                runtime.execute(
+                    "from pathlib import Path\n"
+                    "import time\n"
+                    f"_close_started = Path({started_literal})\n"
+                    f"_close_release = Path({release_literal})\n"
+                    "_close_started.write_text('started', encoding='utf-8')\n"
+                    "while not _close_release.exists():\n"
+                    "    time.sleep(0.01)\n"
+                    "'done'"
+                )
+            )
+            for _ in range(100):
+                if started_marker.exists():
+                    break
+                await asyncio.sleep(0.01)
+            assert started_marker.exists()
+
+            close_task = asyncio.create_task(runtime.close())
+            await asyncio.sleep(0)
+            close_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await close_task
+
+            ticks = 0
+            for _ in range(10):
+                ticks += 1
+                await asyncio.sleep(0.01)
+            assert ticks == 10
+            assert runtime.closed is False
+
+            release_marker.touch()
+            await asyncio.shield(running)
+            for _ in range(100):
+                if runtime.closed:
+                    break
+                await asyncio.sleep(0.01)
+            assert runtime.closed is True
+            assert runtime._shell is None
+        finally:
+            release_marker.touch()
+            if running is not None and not running.done():
+                await asyncio.shield(running)
+            if not runtime.closed:
+                await runtime.close()
+
+    asyncio.run(scenario())
+
+
+def test_canceled_startup_failure_cleans_up_after_repeated_cancellation(
+    monkeypatch,
+):
+    from ipython_mcp.environment import StartupEnvironment
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def failed_prepare(self):
+        del self
+        entered.set()
+        release.wait(timeout=2)
+        raise RuntimeStartupError("startup canceled test failure")
+
+    monkeypatch.setattr(StartupEnvironment, "prepare", failed_prepare)
+
+    async def scenario():
+        runtime = ShellRuntime(ServerConfig())
+        task = asyncio.create_task(runtime.start())
+        for _ in range(100):
+            if entered.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert entered.is_set()
+        task.cancel()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release.set()
+        for _ in range(100):
+            if runtime.closed:
+                break
+            await asyncio.sleep(0.01)
+        assert runtime.closed is True
+        assert runtime._shell is None
+        await runtime.close()
 
     asyncio.run(scenario())
 
@@ -210,6 +372,8 @@ def test_startup_environment_applies_variables_paths_preloads_and_reuses(
         module_aliases={"preload_lib": "lib"},
     )
     monkeypatch.delenv("TASK_SETTING", raising=False)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    path_before_first_start = list(sys.path)
 
     async def run_once():
         runtime = ShellRuntime(config)
@@ -225,13 +389,20 @@ def test_startup_environment_applies_variables_paths_preloads_and_reuses(
             await runtime.close()
 
     asyncio.run(run_once())
+    assert sys.path == path_before_first_start
     metadata = workspace / "alpha" / ".ipython-mcp-environment.json"
     first_metadata = metadata.read_text(encoding="utf-8")
     assert "TASK_SETTING" not in first_metadata
     assert os.getenv("TASK_SETTING") is None
     for module in ("taskdep", "preload_lib"):
         sys.modules.pop(module, None)
+    site_packages = workspace / "alpha" / "lib" / (
+        f"python{sys.version_info.major}.{sys.version_info.minor}"
+    ) / "site-packages"
+    sys.path.insert(2, str(site_packages))
+    path_before_reuse = list(sys.path)
     asyncio.run(run_once())
+    assert sys.path == path_before_reuse
     assert metadata.read_text(encoding="utf-8") == first_metadata
     assert not list(workspace.glob(".alpha.tmp-*"))
 

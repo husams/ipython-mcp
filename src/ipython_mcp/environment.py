@@ -40,6 +40,8 @@ class StartupEnvironment:
         self.site_packages: Path | None = None
         self.requirements_fingerprint: str | None = None
         self._added_paths: list[str] = []
+        self._reordered_paths: dict[str, int] = {}
+        self._original_path_positions: dict[str, int] = {}
         self._previous_environment: dict[str, str | None] = {}
 
     def prepare(self) -> None:
@@ -60,6 +62,12 @@ class StartupEnvironment:
             with contextlib.suppress(ValueError):
                 sys.path.remove(path)
         self._added_paths.clear()
+        for path, index in self._reordered_paths.items():
+            with contextlib.suppress(ValueError):
+                sys.path.remove(path)
+            sys.path.insert(min(index, len(sys.path)), path)
+        self._reordered_paths.clear()
+        self._original_path_positions.clear()
         for name, previous in self._previous_environment.items():
             if previous is None:
                 os.environ.pop(name, None)
@@ -245,11 +253,34 @@ class StartupEnvironment:
                     "library_paths", "configured library path does not exist"
                 )
             paths.append(path)
+        for path in paths:
+            text = str(path)
+            if text in sys.path:
+                self._original_path_positions.setdefault(text, sys.path.index(text))
         for path in reversed(paths):
             text = str(path)
             if text not in sys.path:
                 sys.path.insert(0, text)
                 self._added_paths.append(text)
+
+    def prioritize_site_packages(self) -> None:
+        """Promote selected environment packages and remember existing order."""
+
+        if self.site_packages is None:
+            return
+        path = str(self.site_packages)
+        try:
+            current_index = sys.path.index(path)
+        except ValueError:
+            return
+        if current_index == 0:
+            return
+        if path not in self._added_paths:
+            self._reordered_paths.setdefault(
+                path, self._original_path_positions.get(path, current_index)
+            )
+        sys.path.pop(current_index)
+        sys.path.insert(0, path)
 
     def _error(self, phase: str, exc: BaseException) -> StartupPhaseError:
         message = str(exc) or type(exc).__name__
