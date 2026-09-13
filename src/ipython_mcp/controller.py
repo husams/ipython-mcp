@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import contextlib
 import logging
 import multiprocessing
@@ -78,6 +79,11 @@ class ManagedRuntime:
         self._startup_error: ErrorInfo | None = None
         self._dynamic_count = 0
         self._catalog_revision = 0
+        # Discovery must not join the serialized worker queue.  Keep the
+        # latest completed worker publication here; entries marked inactive
+        # remain available to ``get_tool`` so stale-schema errors still reach
+        # callers after a live callable changes.
+        self._catalog_snapshots: dict[str, DynamicToolSnapshot] = {}
         self._catalog_notification_pending = False
 
     @property
@@ -97,6 +103,7 @@ class ManagedRuntime:
             return
         self._closing = True
         self._state = "closed"
+        self._catalog_snapshots = {}
         async with self._lock:
             queued = list(self._queue)
             self._queue.clear()
@@ -125,6 +132,7 @@ class ManagedRuntime:
             self._dispatcher.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._dispatcher
+        self._catalog_snapshots = {}
         self._closed = True
         self._state = "closed"
 
@@ -206,12 +214,35 @@ class ManagedRuntime:
         return await self._submit("unregister_tool", {"names": names})
 
     async def dynamic_tools(self) -> OperationResult[list[DynamicToolSnapshot]]:
-        return await self._submit("dynamic_tools", {})
+        async with self._lock:
+            if self._closed or self._closing:
+                changed = self._catalog_notification_pending
+                self._catalog_notification_pending = False
+                return OperationResult([], changed)
+            snapshots = [
+                self._copy_snapshot(snapshot)
+                for snapshot in self._catalog_snapshots.values()
+                if snapshot.active
+            ]
+            changed = self._catalog_notification_pending
+            self._catalog_notification_pending = False
+        snapshots.sort(key=lambda snapshot: snapshot.name)
+        return OperationResult(snapshots, changed)
 
     async def dynamic_tool(
         self, name: str
     ) -> OperationResult[DynamicToolSnapshot | None]:
-        return await self._submit("dynamic_tool", {"name": name})
+        async with self._lock:
+            if self._closed or self._closing:
+                changed = self._catalog_notification_pending
+                self._catalog_notification_pending = False
+                return OperationResult(None, changed)
+            snapshot = self._catalog_snapshots.get(name)
+            changed = self._catalog_notification_pending
+            self._catalog_notification_pending = False
+            if snapshot is not None:
+                snapshot = self._copy_snapshot(snapshot)
+        return OperationResult(snapshot, changed)
 
     async def call_dynamic(
         self, name: str, arguments: dict[str, Any]
@@ -433,6 +464,7 @@ class ManagedRuntime:
     ) -> tuple[str, bool]:
         self._state = "recovering"
         self._latest_interruption_kind = kind
+        late_catalog_changed = False
         try:
             await self._send(
                 {
@@ -442,12 +474,32 @@ class ManagedRuntime:
                     "epoch": self._epoch,
                 }
             )
-            await asyncio.wait_for(
+            late_response = await asyncio.wait_for(
                 asyncio.shield(receive), timeout=self.config.interruption_grace_seconds
             )
-        except (asyncio.TimeoutError, BrokenPipeError, EOFError, IpcProtocolError, OSError):
+            if not self._matches_pending_response(pending, late_response):
+                raise IpcProtocolError("late runtime response did not match the interrupted operation")
+            previous_revision = self._catalog_revision
+            previous_catalog = self._catalog_snapshots
+            self._apply_response_catalog(late_response)
+            late_catalog_changed = bool(late_response.get("catalog_changed", False)) or (
+                previous_revision != self._catalog_revision
+                or previous_catalog != self._catalog_snapshots
+            )
+        except (
+            asyncio.TimeoutError,
+            BrokenPipeError,
+            EOFError,
+            IpcProtocolError,
+            OSError,
+            TypeError,
+            ValueError,
+        ):
             receive.cancel()
-            changed = self._dynamic_count > 0
+            changed = self._dynamic_count > 0 or late_catalog_changed
+            self._catalog_notification_pending = (
+                self._catalog_notification_pending or late_catalog_changed
+            )
             if self._closing:
                 await self._terminate_worker()
                 self._latest_namespace_state = "reset"
@@ -464,13 +516,35 @@ class ManagedRuntime:
             if health.get("type") != "health" or health.get("status") != "ready":
                 raise IpcProtocolError("worker health probe failed")
         except (asyncio.TimeoutError, BrokenPipeError, EOFError, IpcProtocolError, OSError):
-            changed = self._dynamic_count > 0
+            changed = self._dynamic_count > 0 or late_catalog_changed
+            self._catalog_notification_pending = (
+                self._catalog_notification_pending or late_catalog_changed
+            )
             replaced = False if self._closing else await self._hard_replace()
             self._latest_namespace_state = "reset" if replaced else "unknown"
             return self._latest_namespace_state, changed
+        previous_revision = self._catalog_revision
+        previous_catalog = self._catalog_snapshots
         self._catalog_revision = int(health.get("catalog_revision", self._catalog_revision))
-        self._dynamic_count = len(health.get("dynamic_tools", []))
-        changed = bool(health.get("catalog_changed", False))
+        catalog = health.get("dynamic_tools")
+        if isinstance(catalog, list):
+            self._dynamic_count = sum(
+                1
+                for item in catalog
+                if isinstance(item, dict) and item.get("active", True)
+            )
+        else:
+            self._dynamic_count = int(
+                health.get("dynamic_count", self._dynamic_count)
+            )
+        self._update_catalog(health)
+        changed = bool(health.get("catalog_changed", False)) or (
+            previous_revision != self._catalog_revision
+            or previous_catalog != self._catalog_snapshots
+        ) or late_catalog_changed
+        self._catalog_notification_pending = (
+            self._catalog_notification_pending or changed
+        )
         self._state = "ready"
         self._latest_namespace_state = "preserved"
         return "preserved", changed
@@ -491,15 +565,15 @@ class ManagedRuntime:
                 namespace_state="unknown",
                 retryable=True,
             )
+        self._apply_response_catalog(message)
         if message.get("status") != "ok":
             return self._failure(
                 pending,
                 "worker_operation_error",
                 "the worker operation failed before producing a protocol result",
+                catalog_changed=bool(message.get("catalog_changed", False)),
                 retryable=True,
             )
-        self._catalog_revision = int(message.get("catalog_revision", self._catalog_revision))
-        self._dynamic_count = int(message.get("dynamic_count", self._dynamic_count))
         value = self._model_value(pending, message.get("value"), queue_wait)
         logger.info(
             "tool=%s request_id=%s epoch=%s elapsed_outcome=ok truncated=%s",
@@ -509,6 +583,97 @@ class ManagedRuntime:
             self._response_truncated(value),
         )
         return OperationResult(value, bool(message.get("catalog_changed", False)))
+
+    def _matches_pending_response(
+        self, pending: _Pending[Any], message: dict[str, Any]
+    ) -> bool:
+        return (
+            message.get("type") == "response"
+            and message.get("request_id") == pending.request_id
+            and message.get("sequence") == pending.sequence
+            and message.get("epoch") == self._epoch
+        )
+
+    def _apply_response_catalog(self, message: dict[str, Any]) -> None:
+        self._catalog_revision = int(
+            message.get("catalog_revision", self._catalog_revision)
+        )
+        self._dynamic_count = int(message.get("dynamic_count", self._dynamic_count))
+        self._update_catalog(message)
+
+    def _update_catalog(self, message: dict[str, Any]) -> None:
+        catalog = message.get("catalog")
+        if not isinstance(catalog, list):
+            # Health responses use the historical field name because that
+            # payload is also consumed by the runtime recovery path.
+            catalog = message.get("dynamic_tools")
+        if isinstance(catalog, list):
+            snapshots: dict[str, DynamicToolSnapshot] = {}
+            for item in catalog:
+                snapshot = self._snapshot_from_payload(item)
+                if snapshot is not None:
+                    snapshots[snapshot.name] = snapshot
+            # Assignment makes publication atomic from the event loop's point
+            # of view, before the corresponding operation future is completed.
+            self._catalog_snapshots = snapshots
+            return
+
+        delta = message.get("catalog_delta")
+        if not isinstance(delta, dict):
+            return
+        snapshots = dict(self._catalog_snapshots)
+        removed = delta.get("removed", [])
+        if isinstance(removed, list):
+            for name in removed:
+                if isinstance(name, str):
+                    snapshots.pop(name, None)
+        upserts = delta.get("upserts", [])
+        if isinstance(upserts, list):
+            for item in upserts:
+                snapshot = self._snapshot_from_payload(item)
+                if snapshot is None and isinstance(item, dict):
+                    name = item.get("name")
+                    old = snapshots.get(name) if isinstance(name, str) else None
+                    if old is not None and isinstance(item.get("active"), bool):
+                        snapshot = DynamicToolSnapshot(
+                            name=old.name,
+                            description=old.description,
+                            input_schema=copy.deepcopy(old.input_schema),
+                            active=item["active"],
+                        )
+                if snapshot is not None:
+                    snapshots[snapshot.name] = snapshot
+        # Assignment makes publication atomic from the event loop's point of
+        # view, before the corresponding operation future is completed.
+        self._catalog_snapshots = snapshots
+
+    @staticmethod
+    def _snapshot_from_payload(item: Any) -> DynamicToolSnapshot | None:
+        if not isinstance(item, dict):
+            return None
+        try:
+            snapshot = DynamicToolSnapshot(
+                name=item["name"],
+                description=item.get("description"),
+                input_schema=copy.deepcopy(item["input_schema"]),
+                active=bool(item["active"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not isinstance(snapshot.name, str) or not isinstance(
+            snapshot.input_schema, dict
+        ):
+            return None
+        return snapshot
+
+    @staticmethod
+    def _copy_snapshot(snapshot: DynamicToolSnapshot) -> DynamicToolSnapshot:
+        return DynamicToolSnapshot(
+            name=snapshot.name,
+            description=snapshot.description,
+            input_schema=copy.deepcopy(snapshot.input_schema),
+            active=snapshot.active,
+        )
 
     def _model_value(self, pending: _Pending[Any], value: Any, queue_wait: float) -> Any:
         if pending.operation == "dynamic_tools":
@@ -689,12 +854,14 @@ class ManagedRuntime:
 
     async def _hard_replace(self) -> bool:
         previous_count = self._dynamic_count
+        had_catalog = bool(self._catalog_snapshots) or previous_count > 0
+        self._catalog_snapshots = {}
         await self._terminate_worker()
         self._epoch += 1
         self._dynamic_count = 0
-        self._catalog_revision += 1 if previous_count else 0
+        self._catalog_revision += 1 if had_catalog else 0
         self._catalog_notification_pending = (
-            self._catalog_notification_pending or previous_count > 0
+            self._catalog_notification_pending or had_catalog
         )
         return await self._start_worker(replacement=True)
 

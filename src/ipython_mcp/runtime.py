@@ -183,7 +183,7 @@ class ShellRuntime:
     async def health(self) -> dict[str, Any]:
         """Probe the owner and reconcile the catalog after an interruption."""
 
-        outcome = await self.dynamic_tools()
+        outcome = await self.dynamic_tools(include_stale=True)
         return {
             "dynamic_tools": [asdict(snapshot) for snapshot in outcome.value],
             "catalog_changed": outcome.catalog_changed,
@@ -265,9 +265,13 @@ class ShellRuntime:
             lambda: self._dynamic_registry.unregister(self.shell.user_ns, names)
         )
 
-    async def dynamic_tools(self) -> OperationResult[list[DynamicToolSnapshot]]:
+    async def dynamic_tools(
+        self, *, include_stale: bool = False
+    ) -> OperationResult[list[DynamicToolSnapshot]]:
         return await self._submit(
-            lambda: self._dynamic_registry.snapshots(self.shell.user_ns)
+            lambda: self._dynamic_registry.snapshots(
+                self.shell.user_ns, include_stale=include_stale
+            )
         )
 
     async def dynamic_tool(

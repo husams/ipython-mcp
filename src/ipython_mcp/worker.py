@@ -25,6 +25,41 @@ def _json_value(value: Any) -> Any:
     return value
 
 
+def _catalog_map(value: Any) -> dict[str, DynamicToolSnapshot]:
+    if not isinstance(value, list):
+        return {}
+    result: dict[str, DynamicToolSnapshot] = {}
+    for item in value:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            continue
+        try:
+            snapshot = DynamicToolSnapshot(**item)
+        except (TypeError, ValueError):
+            continue
+        result[snapshot.name] = snapshot
+    return result
+
+
+def _catalog_delta(
+    previous: dict[str, DynamicToolSnapshot],
+    current: dict[str, DynamicToolSnapshot],
+) -> dict[str, list[Any]]:
+    upserts: list[dict[str, Any]] = []
+    for name, snapshot in current.items():
+        old = previous.get(name)
+        if (
+            old is None
+            or old.input_schema != snapshot.input_schema
+            or old.description != snapshot.description
+        ):
+            upserts.append(asdict(snapshot))
+        elif old.active != snapshot.active:
+            # Tombstones retain the previously published schema in the parent,
+            # so state-only updates keep large schema payloads off the pipe.
+            upserts.append({"name": name, "active": snapshot.active})
+    return {"upserts": upserts, "removed": sorted(set(previous) - set(current))}
+
+
 async def _dispatch(
     runtime: ShellRuntime, operation: str, payload: dict[str, Any]
 ) -> OperationResult[Any]:
@@ -66,25 +101,32 @@ async def _dispatch(
 
 
 async def _run_request(
-    connection: Connection,
     runtime: ShellRuntime,
     message: dict[str, Any],
-    maximum: int,
-) -> None:
+    published_catalog: dict[str, DynamicToolSnapshot],
+) -> tuple[dict[str, Any], dict[str, DynamicToolSnapshot]]:
+    current_catalog = published_catalog
     try:
         outcome = await _dispatch(runtime, message["operation"], message["payload"])
-    except BaseException as exc:
-        response = {
-            "type": "response",
-            "request_id": message.get("request_id"),
-            "sequence": message.get("sequence"),
-            "epoch": message.get("epoch"),
-            "status": "interrupted" if isinstance(exc, KeyboardInterrupt) else "error",
-            "error_type": type(exc).__name__,
-            "catalog_revision": runtime.catalog_revision,
-            "dynamic_count": runtime.dynamic_tool_count,
+        # Reconcile after every operation that may inspect or execute live
+        # user objects.  This keeps the published catalog current even when a
+        # callable mutates the namespace indirectly.
+        catalog_outcome = await runtime.dynamic_tools(include_stale=True)
+        current_catalog = {
+            snapshot.name: snapshot for snapshot in catalog_outcome.value
         }
-    else:
+        catalog_changed = (
+            outcome.catalog_changed
+            or catalog_outcome.catalog_changed
+            or current_catalog != published_catalog
+        )
+        catalog_delta: dict[str, list[Any]] | None = None
+        if catalog_changed:
+            # Catalog construction remains owner-thread work, but discovery
+            # itself is served from the parent-side completed snapshot.  Keep
+            # stale entries here so a previously advertised tool can still
+            # return its explicit stale-schema error through ``get_tool``.
+            catalog_delta = _catalog_delta(published_catalog, current_catalog)
         response = {
             "type": "response",
             "request_id": message["request_id"],
@@ -92,38 +134,68 @@ async def _run_request(
             "epoch": message["epoch"],
             "status": "ok",
             "value": _json_value(outcome.value),
-            "catalog_changed": outcome.catalog_changed,
+            "catalog_changed": catalog_changed,
             "catalog_revision": runtime.catalog_revision,
             "dynamic_count": runtime.dynamic_tool_count,
         }
-    try:
-        send_message(connection, response, maximum)
-    except (BrokenPipeError, EOFError, IpcProtocolError, OSError):
-        return
+        if catalog_delta is not None:
+            response["catalog_delta"] = catalog_delta
+    except BaseException as exc:
+        catalog_changed = False
+        catalog_delta: dict[str, list[Any]] | None = None
+        try:
+            catalog_outcome = await runtime.dynamic_tools(include_stale=True)
+            current_catalog = {
+                snapshot.name: snapshot for snapshot in catalog_outcome.value
+            }
+            catalog_changed = current_catalog != published_catalog
+            if catalog_changed:
+                catalog_delta = _catalog_delta(published_catalog, current_catalog)
+        except BaseException:
+            current_catalog = published_catalog
+        response = {
+            "type": "response",
+            "request_id": message.get("request_id"),
+            "sequence": message.get("sequence"),
+            "epoch": message.get("epoch"),
+            "status": "interrupted" if isinstance(exc, KeyboardInterrupt) else "error",
+            "error_type": type(exc).__name__,
+            "catalog_changed": catalog_changed,
+            "catalog_revision": runtime.catalog_revision,
+            "dynamic_count": runtime.dynamic_tool_count,
+        }
+        if catalog_delta is not None:
+            response["catalog_delta"] = catalog_delta
+    return response, current_catalog
 
 
 async def _worker_loop(
     connection: Connection, config: ServerConfig, maximum: int
 ) -> None:
     runtime = ShellRuntime(config)
+
+    async def send(message: dict[str, Any]) -> None:
+        await asyncio.to_thread(send_message, connection, message, maximum)
+
     try:
         await runtime.start()
     except BaseException as exc:
         message = str(exc) or type(exc).__name__
-        send_message(
-            connection,
+        await send(
             {
                 "type": "startup",
                 "status": "error",
                 "error_type": type(exc).__name__,
                 "message": message[: config.max_text_chars],
-            },
-            maximum,
+            }
         )
         return
-    send_message(connection, {"type": "startup", "status": "ready"}, maximum)
+    await send({"type": "startup", "status": "ready"})
 
-    active: asyncio.Task[None] | None = None
+    active: asyncio.Task[
+        tuple[dict[str, Any], dict[str, DynamicToolSnapshot]]
+    ] | None = None
+    published_catalog: dict[str, DynamicToolSnapshot] = {}
     receive: asyncio.Task[dict[str, Any]] | None = None
     try:
         while True:
@@ -136,8 +208,15 @@ async def _worker_loop(
                 waits.add(active)
             done, _ = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
             if active is not None and active in done:
-                await active
+                try:
+                    response, published_catalog = active.result()
+                except (BrokenPipeError, EOFError, IpcProtocolError, OSError):
+                    break
                 active = None
+                try:
+                    await send(response)
+                except (BrokenPipeError, EOFError, IpcProtocolError, OSError):
+                    break
             if receive not in done:
                 continue
             try:
@@ -148,8 +227,7 @@ async def _worker_loop(
             kind = message.get("type")
             if kind == "request":
                 if active is not None:
-                    send_message(
-                        connection,
+                    await send(
                         {
                             "type": "response",
                             "request_id": message.get("request_id"),
@@ -157,40 +235,48 @@ async def _worker_loop(
                             "epoch": message.get("epoch"),
                             "status": "error",
                             "error_type": "WorkerBusy",
-                        },
-                        maximum,
+                        }
                     )
                     continue
                 active = asyncio.create_task(
-                    _run_request(connection, runtime, message, maximum)
+                    _run_request(runtime, message, published_catalog)
                 )
             elif kind == "interrupt":
                 runtime.request_interrupt()
-            # A health probe received during the tiny interval between an
-            # operation response and active-task cleanup is deliberately
-            # ignored. The parent then takes the fail-safe hard-replacement
-            # path; it can report reset, never a false preserved outcome.
             elif kind == "health" and active is None:
                 try:
                     health = await runtime.health()
                 except BaseException as exc:
-                    send_message(
-                        connection,
+                    await send(
                         {
                             "type": "health",
                             "status": "error",
                             "error_type": type(exc).__name__,
-                        },
-                        maximum,
+                        }
                     )
                 else:
-                    send_message(
-                        connection,
-                        {"type": "health", "status": "ready", **health},
-                        maximum,
+                    health_catalog = _catalog_map(health.get("dynamic_tools"))
+                    previous_catalog = published_catalog
+                    health_changed = bool(health.get("catalog_changed")) or (
+                        health_catalog != previous_catalog
                     )
+                    published_catalog = health_catalog
+                    health.pop("dynamic_tools", None)
+                    health = {
+                        **health,
+                        "dynamic_count": sum(
+                            1 for snapshot in health_catalog.values() if snapshot.active
+                        ),
+                        "catalog_changed": health_changed,
+                        "catalog_delta": _catalog_delta(
+                            previous_catalog, health_catalog
+                        ),
+                    }
+                    # Build the delta against the catalog that preceded the
+                    # health probe; retain only bounded state changes.
+                    await send({"type": "health", "status": "ready", **health})
             elif kind == "close" and active is None:
-                send_message(connection, {"type": "close", "status": "ok"}, maximum)
+                await send({"type": "close", "status": "ok"})
                 break
     finally:
         if receive is not None:
