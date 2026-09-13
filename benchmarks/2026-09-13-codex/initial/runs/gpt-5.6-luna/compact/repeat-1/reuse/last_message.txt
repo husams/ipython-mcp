@@ -1,0 +1,1 @@
+Done: IPython MCP reused epoch 1 and the imported `order_report` module; [reuse.json](</private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/compact/repeat-1/reuse.json>) exactly matches `report_orders`, with the helper untouched.

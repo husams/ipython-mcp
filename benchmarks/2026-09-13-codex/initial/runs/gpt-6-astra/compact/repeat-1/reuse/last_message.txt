@@ -1,0 +1,1 @@
+Created and verified `reuse.json` using 2 MCP execute calls; reused persistent state, imported the helper once, and verified its bytes unchanged.

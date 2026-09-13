@@ -1,0 +1,513 @@
+{
+  "oracle": {
+    "errors": [],
+    "helper_initial_match": true,
+    "helper_matches_initial_sha256": true,
+    "helper_reuse_match": true,
+    "helper_sha256": "ecb20b4ad47785f26427a2ff36102bd09e0cef750dc2ea0f7ceb1d26bdab145b",
+    "helper_summarize_match": true,
+    "helper_unchanged_between_phases": true,
+    "initial_summary_match": true,
+    "ok": true,
+    "result_match": true,
+    "reuse_match": true,
+    "unchanged_sha256": true
+  },
+  "phases": {
+    "initial": {
+      "duration_seconds": 81.920248,
+      "errors": [],
+      "last_message": "Done \u2014 quality summary: `{\"rows\":8,\"valid_rows\":5,\"invalid_rows\":3}`; created `order_report.py` and `result.json`.",
+      "mcp_tool_calls": 2,
+      "mcp_tool_evidence": [
+        {
+          "arguments": {
+            "code": "import csv\nwith open('/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/full/repeat-1/orders_initial.csv', newline='') as f:\n    live_rows = list(csv.DictReader(f))\nlen(live_rows)"
+          },
+          "error": null,
+          "result": {
+            "display_data": [],
+            "error": null,
+            "execution_count": 1,
+            "ok": true,
+            "result": 8,
+            "runtime": {
+              "admission_sequence": 1,
+              "epoch": 1,
+              "interruption_kind": null,
+              "namespace_state": "unchanged",
+              "queue_wait_seconds": 0.000132,
+              "request_id": "37a0098cb5c340e288e0d5900cccff53"
+            },
+            "status": "ok",
+            "stderr": "",
+            "stdout": "",
+            "truncated": {
+              "display_data": false,
+              "items": false,
+              "result": false,
+              "stderr": false,
+              "stderr_omitted_chars": 0,
+              "stdout": false,
+              "stdout_omitted_chars": 0,
+              "traceback": false
+            }
+          },
+          "status": "completed",
+          "successful": true,
+          "tool": "execute"
+        },
+        {
+          "arguments": {
+            "code": "import csv, json, os, sys, tempfile\nhelper_dir = '/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/full/repeat-1/.ipython-mcp/snippets'\nif helper_dir not in sys.path:\n    sys.path.insert(0, helper_dir)\nfrom order_report import report_orders\n\nfieldnames = list(live_rows[0]) if live_rows else []\ntemporary_path = None\ntry:\n    with tempfile.NamedTemporaryFile(mode='w', newline='', suffix='.csv', delete=False) as handle:\n        temporary_path = handle.name\n        writer = csv.DictWriter(handle, fieldnames=fieldnames)\n        writer.writeheader()\n        writer.writerows(live_rows)\n    report = report_orders(temporary_path)\nfinally:\n    if temporary_path is not None:\n        os.unlink(temporary_path)\ninitial_summary = {\n    'rows': len(live_rows),\n    'valid_rows': report['valid_rows'],\n    'invalid_rows': report['invalid_rows'],\n}\nwith open('/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/full/repeat-1/result.json', 'w') as handle:\n    json.dump({'initial_summary': initial_summary, 'report': report}, handle, separators=(',', ':'))\ninitial_summary"
+          },
+          "error": null,
+          "result": {
+            "display_data": [],
+            "error": null,
+            "execution_count": 2,
+            "ok": true,
+            "result": {
+              "invalid_rows": 3,
+              "rows": 8,
+              "valid_rows": 5
+            },
+            "runtime": {
+              "admission_sequence": 2,
+              "epoch": 1,
+              "interruption_kind": null,
+              "namespace_state": "unchanged",
+              "queue_wait_seconds": 0.000134,
+              "request_id": "7387fa1f6c854a0582d811479100b197"
+            },
+            "status": "ok",
+            "stderr": "",
+            "stdout": "",
+            "truncated": {
+              "display_data": false,
+              "items": false,
+              "result": false,
+              "stderr": false,
+              "stderr_omitted_chars": 0,
+              "stdout": false,
+              "stdout_omitted_chars": 0,
+              "traceback": false
+            }
+          },
+          "status": "completed",
+          "successful": true,
+          "tool": "execute"
+        }
+      ],
+      "mcp_tool_failures": 0,
+      "mcp_tool_names": [
+        "execute",
+        "execute"
+      ],
+      "mcp_tool_successes": 2,
+      "returncode": 0,
+      "state_usage": {
+        "evidence": [
+          {
+            "arguments": {
+              "code": "import csv\nwith open('/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/full/repeat-1/orders_initial.csv', newline='') as f:\n    live_rows = list(csv.DictReader(f))\nlen(live_rows)"
+            },
+            "error": null,
+            "result": {
+              "display_data": [],
+              "error": null,
+              "execution_count": 1,
+              "ok": true,
+              "result": 8,
+              "runtime": {
+                "admission_sequence": 1,
+                "epoch": 1,
+                "interruption_kind": null,
+                "namespace_state": "unchanged",
+                "queue_wait_seconds": 0.000132,
+                "request_id": "37a0098cb5c340e288e0d5900cccff53"
+              },
+              "status": "ok",
+              "stderr": "",
+              "stdout": "",
+              "truncated": {
+                "display_data": false,
+                "items": false,
+                "result": false,
+                "stderr": false,
+                "stderr_omitted_chars": 0,
+                "stdout": false,
+                "stdout_omitted_chars": 0,
+                "traceback": false
+              }
+            },
+            "status": "completed",
+            "successful": true,
+            "tool": "execute"
+          },
+          {
+            "arguments": {
+              "code": "import csv, json, os, sys, tempfile\nhelper_dir = '/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/full/repeat-1/.ipython-mcp/snippets'\nif helper_dir not in sys.path:\n    sys.path.insert(0, helper_dir)\nfrom order_report import report_orders\n\nfieldnames = list(live_rows[0]) if live_rows else []\ntemporary_path = None\ntry:\n    with tempfile.NamedTemporaryFile(mode='w', newline='', suffix='.csv', delete=False) as handle:\n        temporary_path = handle.name\n        writer = csv.DictWriter(handle, fieldnames=fieldnames)\n        writer.writeheader()\n        writer.writerows(live_rows)\n    report = report_orders(temporary_path)\nfinally:\n    if temporary_path is not None:\n        os.unlink(temporary_path)\ninitial_summary = {\n    'rows': len(live_rows),\n    'valid_rows': report['valid_rows'],\n    'invalid_rows': report['invalid_rows'],\n}\nwith open('/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/full/repeat-1/result.json', 'w') as handle:\n    json.dump({'initial_summary': initial_summary, 'report': report}, handle, separators=(',', ':'))\ninitial_summary"
+            },
+            "error": null,
+            "result": {
+              "display_data": [],
+              "error": null,
+              "execution_count": 2,
+              "ok": true,
+              "result": {
+                "invalid_rows": 3,
+                "rows": 8,
+                "valid_rows": 5
+              },
+              "runtime": {
+                "admission_sequence": 2,
+                "epoch": 1,
+                "interruption_kind": null,
+                "namespace_state": "unchanged",
+                "queue_wait_seconds": 0.000134,
+                "request_id": "7387fa1f6c854a0582d811479100b197"
+              },
+              "status": "ok",
+              "stderr": "",
+              "stdout": "",
+              "truncated": {
+                "display_data": false,
+                "items": false,
+                "result": false,
+                "stderr": false,
+                "stderr_omitted_chars": 0,
+                "stdout": false,
+                "stdout_omitted_chars": 0,
+                "traceback": false
+              }
+            },
+            "status": "completed",
+            "successful": true,
+            "tool": "execute"
+          }
+        ],
+        "failed_tool_calls": 0,
+        "mcp_tool_call_count": 2,
+        "successful_tool_calls": 2,
+        "tool_names": [
+          "execute",
+          "execute"
+        ]
+      },
+      "status": "success",
+      "timed_out": false,
+      "turn_completed": true,
+      "usage": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 78592,
+        "input_tokens": 95148,
+        "output_tokens": 4094,
+        "reasoning_output_tokens": 2953,
+        "total_tokens": 99242,
+        "uncached_input_tokens": 16556
+      },
+      "usage_status": "available"
+    },
+    "reuse": {
+      "duration_seconds": 39.33651,
+      "errors": [],
+      "last_message": "Done: IPython MCP `runtime_status`, `search`, and two `execute` calls; reused persistent epoch 1 and loaded the unchanged helper once; wrote verified report to [reuse.json](/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/full/repeat-1/reuse.json).",
+      "mcp_tool_calls": 4,
+      "mcp_tool_evidence": [
+        {
+          "arguments": {},
+          "error": null,
+          "result": {
+            "epoch": 1,
+            "error": null,
+            "latest_interruption_kind": null,
+            "latest_namespace_state": "unchanged",
+            "operation_active": false,
+            "queue_depth": 0,
+            "replacement_startup_seconds": null,
+            "state": "ready"
+          },
+          "status": "completed",
+          "successful": true,
+          "tool": "runtime_status"
+        },
+        {
+          "arguments": {
+            "exact": true,
+            "limit": 10,
+            "query": "report_orders"
+          },
+          "error": null,
+          "result": {
+            "error": null,
+            "results": [],
+            "runtime": {
+              "admission_sequence": 1,
+              "epoch": 1,
+              "interruption_kind": null,
+              "namespace_state": "unchanged",
+              "queue_wait_seconds": 0.000141,
+              "request_id": "e02b9ad30eca49cf9719f2fa7b8d83dc"
+            },
+            "truncated": false
+          },
+          "status": "completed",
+          "successful": true,
+          "tool": "search"
+        },
+        {
+          "arguments": {
+            "code": "import inspect, runpy\n_helper_path = \"/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/full/repeat-1/.ipython-mcp/snippets/order_report.py\"\n_helper_ns = runpy.run_path(_helper_path)\nreport_orders = _helper_ns[\"report_orders\"]\n{\"signature\": str(inspect.signature(report_orders)), \"module\": report_orders.__module__}"
+          },
+          "error": null,
+          "result": {
+            "display_data": [],
+            "error": null,
+            "execution_count": 1,
+            "ok": true,
+            "result": {
+              "module": "<run_path>",
+              "signature": "(path)"
+            },
+            "runtime": {
+              "admission_sequence": 2,
+              "epoch": 1,
+              "interruption_kind": null,
+              "namespace_state": "unchanged",
+              "queue_wait_seconds": 0.000148,
+              "request_id": "968877b96d334e14b4e3bb38538db6c6"
+            },
+            "status": "ok",
+            "stderr": "",
+            "stdout": "",
+            "truncated": {
+              "display_data": false,
+              "items": false,
+              "result": false,
+              "stderr": false,
+              "stderr_omitted_chars": 0,
+              "stdout": false,
+              "stdout_omitted_chars": 0,
+              "traceback": false
+            }
+          },
+          "status": "completed",
+          "successful": true,
+          "tool": "execute"
+        },
+        {
+          "arguments": {
+            "code": "import json\nfrom pathlib import Path\n_csv_path = \"/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/full/repeat-1/orders_reuse.csv\"\n_out_path = \"/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/full/repeat-1/reuse.json\"\nreport_result = report_orders(_csv_path)\nwith open(_out_path, \"w\", encoding=\"utf-8\") as _out:\n    json.dump(report_result, _out)\nwith open(_out_path, \"r\", encoding=\"utf-8\") as _in:\n    _written_result = json.load(_in)\n{\"written\": Path(_out_path).exists(), \"bytes\": Path(_out_path).stat().st_size, \"matches_result\": _written_result == report_result, \"result_type\": type(report_result).__name__}"
+          },
+          "error": null,
+          "result": {
+            "display_data": [],
+            "error": null,
+            "execution_count": 2,
+            "ok": true,
+            "result": {
+              "bytes": 113,
+              "matches_result": true,
+              "result_type": "dict",
+              "written": true
+            },
+            "runtime": {
+              "admission_sequence": 3,
+              "epoch": 1,
+              "interruption_kind": null,
+              "namespace_state": "unchanged",
+              "queue_wait_seconds": 0.000142,
+              "request_id": "bb4f7e486c73492180f5ba0b0e29dd7e"
+            },
+            "status": "ok",
+            "stderr": "",
+            "stdout": "",
+            "truncated": {
+              "display_data": false,
+              "items": false,
+              "result": false,
+              "stderr": false,
+              "stderr_omitted_chars": 0,
+              "stdout": false,
+              "stdout_omitted_chars": 0,
+              "traceback": false
+            }
+          },
+          "status": "completed",
+          "successful": true,
+          "tool": "execute"
+        }
+      ],
+      "mcp_tool_failures": 0,
+      "mcp_tool_names": [
+        "runtime_status",
+        "search",
+        "execute",
+        "execute"
+      ],
+      "mcp_tool_successes": 4,
+      "returncode": 0,
+      "state_usage": {
+        "evidence": [
+          {
+            "arguments": {},
+            "error": null,
+            "result": {
+              "epoch": 1,
+              "error": null,
+              "latest_interruption_kind": null,
+              "latest_namespace_state": "unchanged",
+              "operation_active": false,
+              "queue_depth": 0,
+              "replacement_startup_seconds": null,
+              "state": "ready"
+            },
+            "status": "completed",
+            "successful": true,
+            "tool": "runtime_status"
+          },
+          {
+            "arguments": {
+              "exact": true,
+              "limit": 10,
+              "query": "report_orders"
+            },
+            "error": null,
+            "result": {
+              "error": null,
+              "results": [],
+              "runtime": {
+                "admission_sequence": 1,
+                "epoch": 1,
+                "interruption_kind": null,
+                "namespace_state": "unchanged",
+                "queue_wait_seconds": 0.000141,
+                "request_id": "e02b9ad30eca49cf9719f2fa7b8d83dc"
+              },
+              "truncated": false
+            },
+            "status": "completed",
+            "successful": true,
+            "tool": "search"
+          },
+          {
+            "arguments": {
+              "code": "import inspect, runpy\n_helper_path = \"/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/full/repeat-1/.ipython-mcp/snippets/order_report.py\"\n_helper_ns = runpy.run_path(_helper_path)\nreport_orders = _helper_ns[\"report_orders\"]\n{\"signature\": str(inspect.signature(report_orders)), \"module\": report_orders.__module__}"
+            },
+            "error": null,
+            "result": {
+              "display_data": [],
+              "error": null,
+              "execution_count": 1,
+              "ok": true,
+              "result": {
+                "module": "<run_path>",
+                "signature": "(path)"
+              },
+              "runtime": {
+                "admission_sequence": 2,
+                "epoch": 1,
+                "interruption_kind": null,
+                "namespace_state": "unchanged",
+                "queue_wait_seconds": 0.000148,
+                "request_id": "968877b96d334e14b4e3bb38538db6c6"
+              },
+              "status": "ok",
+              "stderr": "",
+              "stdout": "",
+              "truncated": {
+                "display_data": false,
+                "items": false,
+                "result": false,
+                "stderr": false,
+                "stderr_omitted_chars": 0,
+                "stdout": false,
+                "stdout_omitted_chars": 0,
+                "traceback": false
+              }
+            },
+            "status": "completed",
+            "successful": true,
+            "tool": "execute"
+          },
+          {
+            "arguments": {
+              "code": "import json\nfrom pathlib import Path\n_csv_path = \"/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/full/repeat-1/orders_reuse.csv\"\n_out_path = \"/private/tmp/ipython-mcp-codex-benchmark-20260913/workspaces/gpt-5.6-luna/full/repeat-1/reuse.json\"\nreport_result = report_orders(_csv_path)\nwith open(_out_path, \"w\", encoding=\"utf-8\") as _out:\n    json.dump(report_result, _out)\nwith open(_out_path, \"r\", encoding=\"utf-8\") as _in:\n    _written_result = json.load(_in)\n{\"written\": Path(_out_path).exists(), \"bytes\": Path(_out_path).stat().st_size, \"matches_result\": _written_result == report_result, \"result_type\": type(report_result).__name__}"
+            },
+            "error": null,
+            "result": {
+              "display_data": [],
+              "error": null,
+              "execution_count": 2,
+              "ok": true,
+              "result": {
+                "bytes": 113,
+                "matches_result": true,
+                "result_type": "dict",
+                "written": true
+              },
+              "runtime": {
+                "admission_sequence": 3,
+                "epoch": 1,
+                "interruption_kind": null,
+                "namespace_state": "unchanged",
+                "queue_wait_seconds": 0.000142,
+                "request_id": "bb4f7e486c73492180f5ba0b0e29dd7e"
+              },
+              "status": "ok",
+              "stderr": "",
+              "stdout": "",
+              "truncated": {
+                "display_data": false,
+                "items": false,
+                "result": false,
+                "stderr": false,
+                "stderr_omitted_chars": 0,
+                "stdout": false,
+                "stdout_omitted_chars": 0,
+                "traceback": false
+              }
+            },
+            "status": "completed",
+            "successful": true,
+            "tool": "execute"
+          }
+        ],
+        "failed_tool_calls": 0,
+        "mcp_tool_call_count": 4,
+        "successful_tool_calls": 4,
+        "tool_names": [
+          "runtime_status",
+          "search",
+          "execute",
+          "execute"
+        ]
+      },
+      "status": "success",
+      "timed_out": false,
+      "turn_completed": true,
+      "usage": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 59392,
+        "input_tokens": 80168,
+        "output_tokens": 1747,
+        "reasoning_output_tokens": 1152,
+        "total_tokens": 81915,
+        "uncached_input_tokens": 20776
+      },
+      "usage_status": "available"
+    }
+  },
+  "status": "success",
+  "task_correctness": true,
+  "usage_total": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 137984,
+    "input_tokens": 175316,
+    "output_tokens": 5841,
+    "reasoning_output_tokens": 4105,
+    "total_tokens": 181157,
+    "uncached_input_tokens": 37332
+  }
+}

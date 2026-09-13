@@ -1,0 +1,1 @@
+Done: two IPython MCP `execute` calls, reused persistent epoch 1/module, wrote `reuse.json`, and verified the helper was unchanged.

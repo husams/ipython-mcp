@@ -1,0 +1,1 @@
+Saved reuse.json as the exact report_orders result using two MCP execute calls; state persisted, helper imported once and verified unchanged.

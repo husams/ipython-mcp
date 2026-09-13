@@ -9,6 +9,9 @@ FastMCP and the bounded admission controller stay in the parent process. The
 IPython shell, complete namespace, dynamic registry, history-disabled owner
 thread, and every live Python object stay in one lifespan-owned worker process.
 Only versioned, size-limited JSON protocol models cross that process boundary.
+MCP handlers await worker communication without blocking the parent event loop.
+Tool discovery, ping, and runtime status remain available during long-running
+Python execution.
 The worker is a reliability boundary that makes hard recovery possible; it is
 not a sandbox or a permission boundary.
 
@@ -99,7 +102,7 @@ and ask it to call `runtime_status`. Remove the entry with
 
 ## Stable tool surface
 
-The server always publishes eleven stable tools. Registered live callables are
+The default `full` profile publishes eleven stable tools. Registered live callables are
 additional, opt-in tools and are never published automatically:
 
 - `list` discovers visible functions with their current signatures, modules,
@@ -146,11 +149,74 @@ additional, opt-in tools and are never published automatically:
   interruption kind and namespace outcome, and measured replacement startup
   time. It never returns code, arguments, results, or namespace values.
 
+## Compact profile and reusable agent workflows
+
+For routine Python work, start the smaller tool surface with:
+
+```bash
+IPYTHON_MCP_PROFILE=compact uv run ipython-mcp
+```
+
+The compact profile exposes `execute`, `call_function`, and `runtime_status`.
+It omits output schemas and returns one compact JSON text block, which Codex
+CLI can read directly. Empty protocol fields are omitted; user values such
+as `false`, `0`, `null`, and empty containers remain intact. Errors, truncation
+indicators, and namespace recovery information are retained. Each operation
+includes its runtime epoch so an agent can detect loss of live state. Use the
+default `full` profile for clients that require typed `structuredContent` or the complete
+discovery, registration, and cleanup surface. Profile changes require restart.
+
+The repository includes [the IPython skill](skills/ipython-mcp/SKILL.md),
+discovered by Codex through `.agents/skills/ipython-mcp`. Invoke `$ipython-mcp`
+in this repository; in another project, explicitly reference the skill's
+absolute path. It guides agents to load data once, keep shared objects between
+tool calls, return small summaries, and persist reusable functions as ordinary
+Python modules under the active project's `.ipython-mcp/snippets/` directory.
+The [example helpers](skills/ipython-mcp/assets/helpers.py) provide bounded CSV
+summaries. Use absolute paths because the MCP worker's working directory can
+differ from the agent's project.
+
+Smaller models can follow short stages with verification checkpoints; larger
+models can combine independent transformations. Both use the same tools and
+result contract. Snippet files survive new server processes; live variables
+and imports do not. Re-import saved modules in a fresh session instead of
+regenerating their source.
+
+### Measure with Codex CLI
+
+With the project's `.venv` installed and Codex already signed in, run:
+
+```bash
+uv run --no-sync python scripts/codex_benchmark.py \
+  --output-dir /tmp/ipython-mcp-benchmark-new \
+  --models gpt-5.6-luna gpt-6-astra --repeats 1
+```
+
+Use a fresh output directory for each experiment. The harness runs the full
+profile without a skill and the compact profile with the repo skill. Each
+case loads a CSV into a shared namespace, reuses those objects in a later
+call, saves a parameterized helper, then starts a fresh Codex/MCP process to
+reuse the unchanged helper on another input. An independent interpreter
+checks results and helper hashes. The comparison includes skill-reading
+overhead and does not isolate the effect of the skill from the profile.
+
+The runner retains prompts, invocation arguments, JSONL events, token usage,
+tool evidence, correctness checks, and summaries. It uses invocation-only
+MCP approval for the test server and the configured Codex account; it does
+not change global configuration. `--case MODEL/CONDITION` selects one case;
+`--timeout` bounds each CLI process. A failed case returns a nonzero exit.
+See the [measured results](benchmarks/2026-09-13-codex/report.md) for the
+tested CLI version, model results, and limitations.
+The final two-phase CLI runs used 10.3% fewer total tokens with Luna and 19.5%
+fewer with Astra than the full-profile baseline; all output and persistence
+checks passed. These are single-run measurements that include skill-reading
+overhead, not a guarantee for other tasks.
+
 ## Deadlines, admission, and recovery
 
-Every namespace read, mutation, dynamic discovery/reconciliation, registration
-change, and callable invocation receives a monotonic admission sequence and is
-dispatched FIFO. The active operation is not counted in the pending bound.
+Every namespace read, mutation, registration change, and callable invocation
+receives a monotonic admission sequence and is dispatched FIFO. The active
+operation is not counted in the pending bound.
 The defaults allow 32 pending requests to absorb short bursts; they deliberately
 shed sustained slow load and do not promise that 32 near-30-second operations
 will eventually run.
@@ -246,9 +312,14 @@ with the same schema remains callable and uses the current live binding.
 Description or docstring changes do not alter compatibility and do not update
 the registration-time description snapshot until explicit re-registration.
 
-Every registry read and mutation, discovery reconciliation, and dynamic call
-runs on the same single-owner queue as IPython execution. Discovery therefore
-waits behind earlier execution and returns an immutable, reconciled snapshot.
+Registry mutation, reconciliation, and dynamic invocation run on the same
+single-owner queue as IPython execution. MCP `tools/list` and tool lookup read
+the parent's last completed catalog snapshot without entering that queue.
+During execution, discovery returns the previously published catalog; completed
+operations refresh it before returning their results. Worker replacement
+clears it. Invocations still revalidate the live callable in the worker, so a
+cached schema cannot bypass stale-registration checks. The `list` tool reads
+the live Python namespace and therefore still waits for earlier execution.
 The common unchanged path compares callable identity plus a recursive
 signature-affecting token; wrapped callables and `functools.partial` functions,
 arguments, and keyword state are included. Dynamic calls revalidate the live
@@ -278,6 +349,7 @@ teardown drops every registration.
 | `IPYTHON_MCP_MAX_JSON_DEPTH` | Maximum nested JSON translation depth; default `6`. |
 | `IPYTHON_MCP_MAX_TOOL_NAME_CHARS` | Maximum dynamic MCP tool-name size; default `64`. |
 | `IPYTHON_MCP_MAX_TOOL_DESCRIPTION_CHARS` | Maximum registration description snapshot; default `1024`. |
+| `IPYTHON_MCP_PROFILE` | `full` (default, eleven tools) or `compact` (three tools with smaller JSON replies). |
 | `IPYTHON_MCP_MAX_DYNAMIC_TOOLS` | Maximum retained dynamic registrations; default `100`. |
 | `IPYTHON_MCP_OPERATION_TIMEOUT_SECONDS` | Positive finite dispatch-to-result deadline; default `30`. |
 | `IPYTHON_MCP_INTERRUPTION_GRACE_SECONDS` | Positive finite cooperative interruption grace; default `2`. |

@@ -35,8 +35,11 @@ class ServerConfig:
     max_pending_operations: int = 32
     queue_wait_timeout_seconds: float = 30.0
     max_ipc_message_bytes: int = 4 * 1024 * 1024
+    profile: str = "full"
 
     def __post_init__(self) -> None:
+        if self.profile not in {"full", "compact"}:
+            raise ValueError("profile must be 'full' or 'compact'")
         integer_fields = (
             "max_text_chars",
             "max_repr_chars",
@@ -85,6 +88,7 @@ class ServerConfig:
         ):
             raise ValueError("IPYTHON_MCP_MODULE_ALIASES must map module names to aliases")
         return cls(
+            profile=os.getenv("IPYTHON_MCP_PROFILE", "full").strip().lower(),
             library_paths=paths,
             preload_modules=_split(os.getenv("IPYTHON_MCP_PRELOAD_MODULES", "")),
             module_aliases=aliases_value,
@@ -127,6 +131,7 @@ class ServerConfig:
             for name, value in self.__dict__.items()
             if name
             not in {
+                "profile",
                 "operation_timeout_seconds",
                 "interruption_grace_seconds",
                 "worker_startup_timeout_seconds",

@@ -1,0 +1,85 @@
+{
+  "duration_seconds": 29.38176,
+  "errors": [],
+  "last_message": "Wrote reuse.json with one MCP execute call; helper imported fresh, remained byte-for-byte unchanged, and result retained in persistent state.",
+  "mcp_tool_calls": 1,
+  "mcp_tool_evidence": [
+    {
+      "arguments": {
+        "code": "import sys\nimport json\nimport hashlib\nfrom pathlib import Path\n\n_reuse_root = Path('/private/tmp/ipython-mcp-codex-tuned-astra-20260913/workspaces/gpt-6-astra/compact/repeat-1')\n_reuse_helper = _reuse_root / '.ipython-mcp/snippets/order_report.py'\n_reuse_before = _reuse_helper.read_bytes()\n_reuse_module_cached = 'order_report' in sys.modules\n_reuse_snippets = str(_reuse_helper.parent)\nif _reuse_snippets not in sys.path:\n    sys.path.insert(0, _reuse_snippets)\nimport order_report\nassert Path(order_report.__file__).resolve() == _reuse_helper.resolve()\nreuse_result = order_report.report_orders(str(_reuse_root / 'orders_reuse.csv'))\n_reuse_output = _reuse_root / 'reuse.json'\n_reuse_json = json.dumps(reuse_result)\n_reuse_output.write_text(_reuse_json, encoding='utf-8')\nassert _reuse_output.read_text(encoding='utf-8') == _reuse_json\nassert _reuse_helper.read_bytes() == _reuse_before\n{'output': str(_reuse_output), 'module_reused': _reuse_module_cached, 'helper_unchanged': True, 'bytes_written': _reuse_output.stat().st_size}"
+      },
+      "error": null,
+      "result": {
+        "execution_count": 1,
+        "ok": true,
+        "result": {
+          "bytes_written": 113,
+          "helper_unchanged": true,
+          "module_reused": false,
+          "output": "/private/tmp/ipython-mcp-codex-tuned-astra-20260913/workspaces/gpt-6-astra/compact/repeat-1/reuse.json"
+        },
+        "runtime": {
+          "epoch": 1,
+          "queue_wait_seconds": 0.000196
+        },
+        "status": "ok"
+      },
+      "status": "completed",
+      "successful": true,
+      "tool": "execute"
+    }
+  ],
+  "mcp_tool_failures": 0,
+  "mcp_tool_names": [
+    "execute"
+  ],
+  "mcp_tool_successes": 1,
+  "returncode": 0,
+  "state_usage": {
+    "evidence": [
+      {
+        "arguments": {
+          "code": "import sys\nimport json\nimport hashlib\nfrom pathlib import Path\n\n_reuse_root = Path('/private/tmp/ipython-mcp-codex-tuned-astra-20260913/workspaces/gpt-6-astra/compact/repeat-1')\n_reuse_helper = _reuse_root / '.ipython-mcp/snippets/order_report.py'\n_reuse_before = _reuse_helper.read_bytes()\n_reuse_module_cached = 'order_report' in sys.modules\n_reuse_snippets = str(_reuse_helper.parent)\nif _reuse_snippets not in sys.path:\n    sys.path.insert(0, _reuse_snippets)\nimport order_report\nassert Path(order_report.__file__).resolve() == _reuse_helper.resolve()\nreuse_result = order_report.report_orders(str(_reuse_root / 'orders_reuse.csv'))\n_reuse_output = _reuse_root / 'reuse.json'\n_reuse_json = json.dumps(reuse_result)\n_reuse_output.write_text(_reuse_json, encoding='utf-8')\nassert _reuse_output.read_text(encoding='utf-8') == _reuse_json\nassert _reuse_helper.read_bytes() == _reuse_before\n{'output': str(_reuse_output), 'module_reused': _reuse_module_cached, 'helper_unchanged': True, 'bytes_written': _reuse_output.stat().st_size}"
+        },
+        "error": null,
+        "result": {
+          "execution_count": 1,
+          "ok": true,
+          "result": {
+            "bytes_written": 113,
+            "helper_unchanged": true,
+            "module_reused": false,
+            "output": "/private/tmp/ipython-mcp-codex-tuned-astra-20260913/workspaces/gpt-6-astra/compact/repeat-1/reuse.json"
+          },
+          "runtime": {
+            "epoch": 1,
+            "queue_wait_seconds": 0.000196
+          },
+          "status": "ok"
+        },
+        "status": "completed",
+        "successful": true,
+        "tool": "execute"
+      }
+    ],
+    "failed_tool_calls": 0,
+    "mcp_tool_call_count": 1,
+    "successful_tool_calls": 1,
+    "tool_names": [
+      "execute"
+    ]
+  },
+  "status": "success",
+  "timed_out": false,
+  "turn_completed": true,
+  "usage": {
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 34176,
+    "input_tokens": 52899,
+    "output_tokens": 562,
+    "reasoning_output_tokens": 70,
+    "total_tokens": 53461,
+    "uncached_input_tokens": 18723
+  },
+  "usage_status": "available"
+}
